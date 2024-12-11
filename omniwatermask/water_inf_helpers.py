@@ -1,0 +1,531 @@
+import logging
+from pathlib import Path
+from queue import Queue
+from threading import Thread
+from typing import Optional
+
+import cv2
+import numpy as np
+import rasterio as rio
+import torch
+from omnicloudmask import predict_from_array
+from omnicloudmask.model_utils import load_model, load_model_from_weights
+from scipy.optimize import minimize_scalar
+
+from .download_models import get_models
+from .prior_builders import build_negative_priors, build_priors
+
+
+def get_masked_iou(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    mask: Optional[torch.Tensor] = None,
+    weighted: bool = True,
+) -> float:
+    """
+    Calculate IoU between source and target tensors with optional masking and weighting.
+
+    Args:
+        source: Binary tensor (0s and 1s)
+        target: Binary tensor (0s and 1s) or weighted tensor (0, 1, 2, etc.) if weighted=True
+        mask: Optional mask tensor (True values are excluded from calculation)
+        weighted: If True, treats target as weighted values instead of binary
+
+    Returns:
+        float: IoU score (weighted if weighted=True)
+    """
+    if mask is not None:
+        source = torch.logical_and(source, ~mask)
+        target = torch.where(mask, torch.zeros_like(target), target)
+
+    if weighted:
+        # intersection = torch.minimum(source, target).sum().item()
+        intersection = (target * source).sum().item()
+        union = torch.maximum(source, target).sum().item()
+    else:
+        intersection = torch.logical_and(source, target).sum().item()
+        union = torch.logical_or(source, target).sum().item()
+
+    iou_score = intersection / union if union != 0 else 0
+    return iou_score
+
+
+def optimise_threshold(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    mask: Optional[torch.Tensor],
+    min_thresh: float = -0.3,
+    max_thresh: float = 0.3,
+    num_steps: int = 40,
+) -> tuple[torch.Tensor, float]:
+    """Get the optimal threshold to align the source tensor with the target tensor"""
+
+    def objective(threshold):
+        return -get_masked_iou(
+            source=(source > threshold), target=target, mask=mask
+        )  # Negative because we want to maximize
+
+    result = minimize_scalar(
+        objective,
+        bounds=(min_thresh, max_thresh),
+        method="bounded",
+        options={"xatol": 0.0001, "maxiter": num_steps},
+    )
+
+    optimal_threshold = result.x  # type: ignore
+    highest_accuracy = -result.fun  # type: ignore
+
+    return source > optimal_threshold, float(highest_accuracy)
+
+
+def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    """Get the intersection ratio of each cluster in the source image with the target image
+    returns a tensor of the same shape as the source image with the intersection ratios
+    """
+    source_np = source.numpy(force=True).astype(np.uint8)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        source_np, connectivity=8
+    )
+
+    labeled_torch = torch.from_numpy(labels).to(source.device)
+
+    intersection_ratios = torch.zeros_like(source, dtype=torch.float32)
+
+    for label in range(1, num_labels):
+        min_col, min_row, width, height, _ = stats[label]
+        max_row, max_col = min_row + height, min_col + width
+
+        cluster_mask_slice = (
+            labeled_torch[min_row:max_row, min_col:max_col] == label
+        ).float()
+        pred_slice = target[min_row:max_row, min_col:max_col].float()
+
+        variable_cluster_sum = cluster_mask_slice.sum()
+        binary_cluster_sum = (cluster_mask_slice * pred_slice).sum()
+
+        intersecting_ratio = binary_cluster_sum / variable_cluster_sum
+
+        intersection_ratios[min_row:max_row, min_col:max_col] += (
+            cluster_mask_slice * intersecting_ratio
+        )
+
+    return intersection_ratios
+
+
+def optimise_by_threshold_and_overlap(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    mask: Optional[torch.Tensor],
+    scene_thresholds: tuple = (-0.3, 0.3),
+    cluster_thresholds: tuple = (0.4, 0.6),
+    scene_threshold_steps: int = 20,
+    cluster_ratio_steps: int = 15,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Optimise the agreement of the source image with the target image by thresholding and overlapping"""
+    thresholded_source, _ = optimise_threshold(
+        source=source,
+        target=target,
+        mask=mask,
+        min_thresh=scene_thresholds[0],
+        max_thresh=scene_thresholds[1],
+        num_steps=scene_threshold_steps,
+    )
+
+    cluster_with_intersection_ratios = get_intersection_ratio(
+        source=thresholded_source, target=target
+    )
+
+    if mask is not None:
+        cluster_with_intersection_ratios = cluster_with_intersection_ratios * ~mask
+
+    cluster_filter_source, _ = optimise_threshold(
+        source=cluster_with_intersection_ratios,
+        target=target,
+        mask=None,
+        min_thresh=cluster_thresholds[0],
+        max_thresh=cluster_thresholds[1],
+        num_steps=cluster_ratio_steps,
+    )
+    return cluster_filter_source, source > thresholded_source
+
+
+def optimise_patches(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    accuracy_tracker: torch.Tensor,
+    cumulative_detections: torch.Tensor,
+    patch_size: int,
+    min_thresh: float,
+    max_thresh: float,
+    mask: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Optimise the agreement of the source image with the target image by thresholding and overlapping in patches"""
+    max_height, max_width = source.shape
+
+    for top in range(0, max_height, patch_size):
+        bottom = min(top + patch_size, max_height)
+        full_size_top = bottom - patch_size
+
+        for left in range(0, max_width, patch_size):
+            right = min(left + patch_size, max_width)
+            full_size_left = right - patch_size
+
+            target_patch = target[full_size_top:bottom, full_size_left:right]
+            if mask is not None:
+                mask_patch = mask[full_size_top:bottom, full_size_left:right]
+
+            if target_patch.sum() != 0:
+                source_patch = source[full_size_top:bottom, full_size_left:right]
+                binary_source_patch, patch_accuracy = optimise_threshold(
+                    source=source_patch,
+                    target=target_patch,
+                    mask=mask_patch if mask is not None else None,
+                    min_thresh=min_thresh,
+                    max_thresh=max_thresh,
+                )
+                cumulative_detections[top:bottom, left:right] += (
+                    binary_source_patch[-(bottom - top) :, -(right - left) :].float()
+                    * patch_accuracy
+                )
+                accuracy_tracker[top:bottom, left:right] += patch_accuracy
+
+    return cumulative_detections, accuracy_tracker
+
+
+def multi_scale_optimisation(
+    source: torch.Tensor,
+    target: torch.Tensor,
+    patch_sizes: list[int],
+    mask: Optional[torch.Tensor],
+    min_thresh: float = -0.1,
+    max_thresh: float = 0.4,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Optimise the agreement of the source image with the target image by thresholding and overlapping at multiple scales,
+    results of which are combined and further optimised to a binary output"""
+
+    cumulative_detections, accuracy = optimise_threshold(
+        source=source,
+        target=target,
+        min_thresh=min_thresh,
+        max_thresh=max_thresh,
+        mask=mask,
+    )
+    cumulative_detections = cumulative_detections.float() * accuracy
+    accuracy_tracker = torch.zeros_like(source, dtype=torch.float) + accuracy
+
+    for patch_size in patch_sizes:
+        if patch_size < source.shape[0] and patch_size < source.shape[1]:
+            cumulative_detections, accuracy_tracker = optimise_patches(
+                target=target,
+                source=source,
+                accuracy_tracker=accuracy_tracker,
+                cumulative_detections=cumulative_detections,
+                patch_size=patch_size,
+                min_thresh=min_thresh,
+                max_thresh=max_thresh,
+            )
+    normalised_accuracy = cumulative_detections / accuracy_tracker
+
+    if torch.isnan(normalised_accuracy).any():
+        logging.debug("Normalised accuracy contains NaN values, setting to zeros")
+        normalised_accuracy = torch.zeros_like(normalised_accuracy)
+
+    threshold_and_cluster_optimised, threshold_optimised = (
+        optimise_by_threshold_and_overlap(
+            source=normalised_accuracy,
+            target=target,
+            mask=mask,
+            scene_thresholds=(0, 1),
+            scene_threshold_steps=10,
+            cluster_ratio_steps=10,
+        )
+    )
+
+    return (
+        threshold_and_cluster_optimised,
+        accuracy_tracker,
+        cumulative_detections,
+        threshold_optimised,
+        normalised_accuracy,
+    )
+
+
+def get_NDWI(input_bands: np.ndarray, combine_device: str) -> torch.Tensor:
+    input_bands_tensor = torch.from_numpy(input_bands.astype(np.float16)).to(
+        combine_device
+    )
+    ndwi = (input_bands_tensor[1] - input_bands_tensor[3]) / (
+        input_bands_tensor[1] + input_bands_tensor[3]
+    )
+
+    return ndwi
+
+
+def make_composite_output(input_dict: dict) -> tuple[np.ndarray, list[str]]:
+    output_layers = []
+    layer_names = []
+    # Get the shape of the first non-None layer
+    for key, value in input_dict.items():
+        if value is not None:
+            shape = value.shape
+            break
+    for key, value in input_dict.items():
+        #  if value is None set it to a zero tensor of the same shape, this avoids missing export layers
+        if value is None:
+            logging.info(f"Layer {key} is None, setting to zero tensor")
+            value = torch.zeros(shape, dtype=torch.float32)
+        output_layers.append(value.float().numpy(force=True).astype(np.float32))
+        layer_names.append(key)
+    output_layers = np.stack(output_layers)
+    return output_layers, layer_names
+
+
+def integrate_water_detection_methods(
+    input_bands: np.ndarray,
+    input_path: Path,
+    cache_dir: Path,
+    model_path: list[str] | list[Path] | str | Path = "",
+    batch_size: int = 1,
+    inference_dtype: str = "bfloat16",
+    inference_device: str = "cpu",
+    inference_patch_size: int = 1000,
+    inference_overlap_size: int = 300,
+    use_cache: bool = True,
+    patch_sizes: list[int] = [200, 400, 800, 1000],
+    debug_output: bool = False,
+    use_osm: bool = True,
+    use_ndwi: bool = True,
+    use_model: bool = True,
+    use_osm_building_mask: bool = True,
+    use_osm_roads_mask: bool = False,
+    aux_vector_sources: list[Path] = [],
+    aux_negative_vector_sources: list[Path] = [],
+    combine_device: str = "cpu",
+    bf16: bool = True,
+    optimise_model: bool = True,
+    regression_model: bool = False,
+) -> tuple[np.ndarray, list[str]]:
+    """Combine the NDWI, model predictions and vector priors"""
+    combined_water = []
+    model_target = []
+    ndwi_target = []
+    negative_prior = []
+    logging.info("Integrating water detection methods")
+    ndwi_conf_tensor = get_NDWI(input_bands=input_bands, combine_device=combine_device)
+
+    # if zeros across all bands, set to no data
+    no_data_mask = torch.tensor(np.all(input_bands == 0, axis=0)).to(combine_device)
+    if bf16:
+        no_data_mask = no_data_mask.bfloat16()
+    negative_prior.append(no_data_mask)
+
+    if bf16:
+        logging.info("Converting NDWI to bfloat16")
+        ndwi_conf_tensor = ndwi_conf_tensor.bfloat16()
+
+    logging.info("Building vector prior in thread")
+    vector_prior_result_queue = Queue()
+    vector_prior_thread = Thread(
+        target=build_priors,
+        kwargs={
+            "raster_src": rio.open(input_path),
+            "osm_water": use_osm,
+            "aux_vector_sources": aux_vector_sources,
+            "device": combine_device,
+            "cache_dir": cache_dir,
+            "use_cache": use_cache,
+            "queue": vector_prior_result_queue,
+        },
+    )
+    vector_prior_thread.start()
+
+    if use_osm_building_mask or use_osm_roads_mask:
+        logging.info("Building negative priors in thread")
+        negative_prior_result_queue = Queue()
+        negative_prior_thread = Thread(
+            target=build_negative_priors,
+            kwargs={
+                "raster_src": rio.open(input_path),
+                "osm_buildings": use_osm_building_mask,
+                "osm_roads": use_osm_roads_mask,
+                "aux_vector_sources": aux_negative_vector_sources,
+                "device": combine_device,
+                "cache_dir": cache_dir,
+                "use_cache": use_cache,
+                "queue": negative_prior_result_queue,
+            },
+        )
+        negative_prior_thread.start()
+
+    if use_model:
+        logging.info("Predicting water mask using custom model")
+        models = []
+        if model_path != "":
+            if not isinstance(model_path, list):
+                model_path_list = [model_path]
+            else:
+                model_path_list = model_path
+
+            for model_p in model_path_list:
+                model = load_model(
+                    model_path=model_p,
+                    device=ndwi_conf_tensor.device,
+                    dtype=ndwi_conf_tensor.dtype,
+                )
+                models.append(model)
+        # if no model path is provided, use the default model
+        else:
+            for model_details in get_models():
+                models.append(
+                    load_model_from_weights(
+                        model_name=model_details["timm_model_name"],
+                        weights_path=model_details["Path"],
+                        device=ndwi_conf_tensor.device,
+                        dtype=ndwi_conf_tensor.dtype,
+                        in_chans=4,
+                        n_out=2,
+                    )
+                )
+
+        if regression_model:
+            class_count = 1
+        else:
+            class_count = 2
+        if regression_model:
+            sf_model = False
+        else:
+            sf_model = True
+        model_conf = predict_from_array(
+            input_bands[:4],
+            custom_models=models,
+            batch_size=batch_size,
+            inference_dtype=inference_dtype,
+            export_confidence=True,
+            softmax_output=sf_model,
+            no_data_value=-1,
+            pred_classes=class_count,
+            inference_device=inference_device,
+            patch_size=inference_patch_size,
+            patch_overlap=inference_overlap_size,
+        )
+        model_conf_tensor = torch.from_numpy(model_conf).to(combine_device)
+        if bf16:
+            model_conf_tensor = model_conf_tensor.bfloat16()
+
+        if regression_model:
+            model_conf = torch.nan_to_num(model_conf_tensor)
+            model_conf_tensor = (model_conf_tensor[0]) - 0.15  # 0.5
+
+        else:
+            model_conf_tensor = model_conf_tensor[1] - model_conf_tensor[0]
+
+        model_binary = model_conf_tensor > 0.0
+
+        ndwi_target.append(model_binary)
+    else:
+        model_conf_tensor = None
+        model_binary = None
+
+    logging.info("Waiting for vector priors to finish")
+    vector_prior_thread.join()
+    vector_priors = vector_prior_result_queue.get()
+
+    if vector_priors is not None:
+        model_target.append(vector_priors)
+        ndwi_target.append(vector_priors)
+
+    if use_osm_building_mask or use_osm_roads_mask:
+        logging.info("Waiting for negative priors to finish")
+        negative_prior_thread.join()
+        vector_negative_prior = negative_prior_result_queue.get()
+        if vector_negative_prior is not None:
+            negative_prior.append(vector_negative_prior)
+
+    if len(negative_prior) > 0:
+        negative_prior = torch.stack(negative_prior).sum(0) > 0
+    else:
+        negative_prior = None
+
+    if use_ndwi:
+        logging.info("Optimising NDWI")
+        if len(ndwi_target) > 0:
+            ndwi_target = torch.stack(ndwi_target).sum(0)
+        else:
+            ndwi_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
+
+        (
+            NDWI_binary,
+            NDWI_accuracy_tracker,
+            NDWI_cumulative_detections,
+            _,
+            normalised_accuracy,
+        ) = multi_scale_optimisation(
+            source=ndwi_conf_tensor,
+            target=ndwi_target,
+            patch_sizes=patch_sizes,
+            mask=negative_prior,
+        )
+        logging.info("Multi-scale optimisation accuracy finished")
+        combined_water.append(NDWI_binary)
+        model_target.append(NDWI_binary)
+        model_target.append(ndwi_conf_tensor > 0.5)
+
+    else:
+        NDWI_accuracy_tracker = None
+        NDWI_cumulative_detections = None
+        normalised_accuracy = None
+
+    if len(model_target) > 0:
+        model_target = torch.stack(model_target).sum(0)
+    else:
+        model_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
+
+    if model_conf_tensor is not None:
+        if optimise_model:
+            logging.info("Optimising model predictions")
+            model_binary_cleaned, _ = optimise_by_threshold_and_overlap(
+                source=model_conf_tensor,
+                target=model_target,
+                mask=negative_prior,
+                scene_thresholds=(0, 1),
+            )
+
+            combined_water.append(model_binary_cleaned)
+        else:
+            logging.info("Using raw model predictions")
+            combined_water.append(model_binary)
+            model_binary_cleaned = None
+
+    else:
+        model_conf_tensor = None
+        model_binary_cleaned = None
+
+    combined_water = torch.stack(combined_water).sum(0) > 0
+
+    if debug_output:
+        logging.info("Exporting debug layers")
+        final_output, layer_names = make_composite_output(
+            {
+                "Water predictions": combined_water,
+                "NDWI binary": NDWI_binary,
+                "NDWI target": ndwi_target,
+                "NDWI raw": ndwi_conf_tensor,
+                "NDWI cumulative detections": NDWI_cumulative_detections,
+                "NDWI accuracy tracker": NDWI_accuracy_tracker,
+                "NDWI normalised accuracy": normalised_accuracy,
+                "NDWI prior": ndwi_target,
+                "Model binary cleaned": model_binary_cleaned,
+                "Model binary": model_binary,
+                "Model target": model_target,
+                "Model confidence": model_conf_tensor,
+                "Vector prior": vector_priors,
+                "Negative prior": negative_prior,
+            }
+        )
+    else:
+        final_output = combined_water.numpy(force=True).astype(np.uint8)
+        final_output = np.expand_dims(final_output, axis=0)
+        layer_names = ["Water predictions"]
+
+    return final_output, layer_names
