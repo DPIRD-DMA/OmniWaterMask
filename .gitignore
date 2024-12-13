@@ -3,5 +3,4 @@ omniwatermask/__pycache__/*
 omniwatermask/models/*.pth
 water_vectors_cache/*
 0POLYGON((33.0949022.51866,33.0956023.51053,32.0201623.50747,32.0272922.51575,33.0949022.51866))_True__False.pkl
-test usage.ipynb
 example/*
