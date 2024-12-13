@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from queue import Queue
 from threading import Thread
-from typing import Optional
+from typing import Optional, Union
 
 import cv2
 import numpy as np
@@ -251,9 +251,11 @@ def multi_scale_optimisation(
     )
 
 
-def get_NDWI(input_bands: np.ndarray, combine_device: str) -> torch.Tensor:
+def get_NDWI(
+    input_bands: np.ndarray, mosaic_device: Union[str, torch.device]
+) -> torch.Tensor:
     input_bands_tensor = torch.from_numpy(input_bands.astype(np.float16)).to(
-        combine_device
+        mosaic_device
     )
     ndwi = (input_bands_tensor[1] - input_bands_tensor[3]) / (
         input_bands_tensor[1] + input_bands_tensor[3]
@@ -285,12 +287,13 @@ def integrate_water_detection_methods(
     input_bands: np.ndarray,
     input_path: Path,
     cache_dir: Path,
+    inference_dtype: torch.dtype,
+    inference_device: torch.device,
+    inference_patch_size: int,
+    inference_overlap_size: int,
+    batch_size: int,
+    models: list[torch.nn.Module],
     model_path: list[str] | list[Path] | str | Path = "",
-    batch_size: int = 1,
-    inference_dtype: str = "bfloat16",
-    inference_device: str = "cpu",
-    inference_patch_size: int = 1000,
-    inference_overlap_size: int = 300,
     use_cache: bool = True,
     patch_sizes: list[int] = [200, 400, 800, 1000],
     debug_output: bool = False,
@@ -298,11 +301,11 @@ def integrate_water_detection_methods(
     use_ndwi: bool = True,
     use_model: bool = True,
     use_osm_building_mask: bool = True,
-    use_osm_roads_mask: bool = False,
+    use_osm_roads_mask: bool = True,
     aux_vector_sources: list[Path] = [],
     aux_negative_vector_sources: list[Path] = [],
-    combine_device: str = "cpu",
-    bf16: bool = True,
+    mosaic_device: Union[str, torch.device] = "cpu",
+    no_data_value: int = 0,
     optimise_model: bool = True,
     regression_model: bool = False,
 ) -> tuple[np.ndarray, list[str]]:
@@ -312,17 +315,16 @@ def integrate_water_detection_methods(
     ndwi_target = []
     negative_prior = []
     logging.info("Integrating water detection methods")
-    ndwi_conf_tensor = get_NDWI(input_bands=input_bands, combine_device=combine_device)
+    ndwi_conf_tensor = get_NDWI(input_bands=input_bands, mosaic_device=mosaic_device)
 
     # if zeros across all bands, set to no data
-    no_data_mask = torch.tensor(np.all(input_bands == 0, axis=0)).to(combine_device)
-    if bf16:
-        no_data_mask = no_data_mask.bfloat16()
+    no_data_mask = torch.tensor(np.all(input_bands == no_data_value, axis=0)).to(
+        mosaic_device
+    )
+    no_data_mask = no_data_mask.to(inference_dtype)
     negative_prior.append(no_data_mask)
 
-    if bf16:
-        logging.info("Converting NDWI to bfloat16")
-        ndwi_conf_tensor = ndwi_conf_tensor.bfloat16()
+    ndwi_conf_tensor = ndwi_conf_tensor.to(inference_dtype)
 
     logging.info("Building vector prior in thread")
     vector_prior_result_queue = Queue()
@@ -332,7 +334,7 @@ def integrate_water_detection_methods(
             "raster_src": rio.open(input_path),
             "osm_water": use_osm,
             "aux_vector_sources": aux_vector_sources,
-            "device": combine_device,
+            "device": mosaic_device,
             "cache_dir": cache_dir,
             "use_cache": use_cache,
             "queue": vector_prior_result_queue,
@@ -350,7 +352,7 @@ def integrate_water_detection_methods(
                 "osm_buildings": use_osm_building_mask,
                 "osm_roads": use_osm_roads_mask,
                 "aux_vector_sources": aux_negative_vector_sources,
-                "device": combine_device,
+                "device": mosaic_device,
                 "cache_dir": cache_dir,
                 "use_cache": use_cache,
                 "queue": negative_prior_result_queue,
@@ -360,33 +362,6 @@ def integrate_water_detection_methods(
 
     if use_model:
         logging.info("Predicting water mask using custom model")
-        models = []
-        if model_path != "":
-            if not isinstance(model_path, list):
-                model_path_list = [model_path]
-            else:
-                model_path_list = model_path
-
-            for model_p in model_path_list:
-                model = load_model(
-                    model_path=model_p,
-                    device=ndwi_conf_tensor.device,
-                    dtype=ndwi_conf_tensor.dtype,
-                )
-                models.append(model)
-        # if no model path is provided, use the default model
-        else:
-            for model_details in get_models():
-                models.append(
-                    load_model_from_weights(
-                        model_name=model_details["timm_model_name"],
-                        weights_path=model_details["Path"],
-                        device=ndwi_conf_tensor.device,
-                        dtype=ndwi_conf_tensor.dtype,
-                        in_chans=4,
-                        n_out=2,
-                    )
-                )
 
         if regression_model:
             class_count = 1
@@ -403,15 +378,16 @@ def integrate_water_detection_methods(
             inference_dtype=inference_dtype,
             export_confidence=True,
             softmax_output=sf_model,
-            no_data_value=-1,
+            no_data_value=no_data_value,
             pred_classes=class_count,
             inference_device=inference_device,
+            mosaic_device=mosaic_device,
             patch_size=inference_patch_size,
             patch_overlap=inference_overlap_size,
         )
-        model_conf_tensor = torch.from_numpy(model_conf).to(combine_device)
-        if bf16:
-            model_conf_tensor = model_conf_tensor.bfloat16()
+        model_conf_tensor = torch.from_numpy(model_conf).to(mosaic_device)
+
+        model_conf_tensor = model_conf_tensor.to(inference_dtype)
 
         if regression_model:
             model_conf = torch.nan_to_num(model_conf_tensor)

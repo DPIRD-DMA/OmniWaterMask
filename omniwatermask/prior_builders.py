@@ -10,41 +10,9 @@ import pandas as pd
 import rasterio as rio
 import torch
 from pyproj import CRS
-from shapely import prepare
-from shapely.geometry import MultiPolygon, Polygon, box
-from shapely.ops import unary_union
+from shapely.geometry import box
 
 from .raster_helpers import rasterize_vector
-
-
-def optimized_remove_polygon_holes(
-    outer_polygons: list[Polygon],
-    inner_polygons: list[Polygon],
-) -> Polygon | MultiPolygon:
-    """The existing OSMnx function is slow when removing holes from polygons.
-    Fix in progress:
-    https://github.com/gboeing/osmnx/issues/1200
-    """
-    if len(inner_polygons) == 0:
-        # if there are no holes to remove, geom is the union of outer polygons
-        geometry = unary_union(outer_polygons)
-    else:
-        # otherwise, remove from each outer poly each inner poly it contains
-        polygons_with_holes = []
-        for outer in outer_polygons:
-            prepare(outer)
-            holes = [inner for inner in inner_polygons if outer.contains(inner)]
-            polygons_with_holes.append(outer.difference(unary_union(holes)))
-        geometry = unary_union(polygons_with_holes)
-
-    # ensure returned geometry is a Polygon or MultiPolygon
-    if isinstance(geometry, (Polygon, MultiPolygon)):
-        return geometry
-    return Polygon()
-
-
-# Monkey patch the OSMnx function
-ox.features._remove_polygon_holes = optimized_remove_polygon_holes
 
 
 def get_osm_features(
@@ -72,7 +40,6 @@ def get_osm_features(
 
     features = features.drop(columns=["nodes", "ways"], errors="ignore")
     features = features.to_crs("EPSG:4326")
-    # osm_water = osm_water.clip(gdf_bounds_4326)
     features = gpd.clip(features, gdf_bounds_4326)
     return gpd.GeoDataFrame(features)
 
