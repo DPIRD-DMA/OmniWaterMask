@@ -13,6 +13,7 @@ from pyproj import CRS
 from shapely.geometry import box
 
 from .raster_helpers import rasterize_vector
+from .vector_cache import add_to_db, check_db
 
 
 def get_osm_features(
@@ -23,7 +24,7 @@ def get_osm_features(
     gpd_bbox = gdf_bounds_4326.total_bounds
     try:
         features = ox.features_from_bbox(
-            bbox=(gpd_bbox[3], gpd_bbox[1], gpd_bbox[0], gpd_bbox[2]),
+            bbox=tuple(gpd_bbox),
             tags=tags,
         )
     except Exception as e:
@@ -83,7 +84,9 @@ def combine_vector_priors(
     logging.info("Buffering line features")
     line_mask = all_priors.geometry.type.isin(["LineString", "MultiLineString"])
 
-    all_priors.loc[line_mask, "geometry"] = all_priors.loc[line_mask, "geometry"].buffer(distance=5, resolution=8)  # type: ignore
+    all_priors.loc[line_mask, "geometry"] = all_priors.loc[
+        line_mask, "geometry"
+    ].buffer(distance=5, resolution=8)  # type: ignore
 
     all_priors["geometry"] = all_priors["geometry"].make_valid()
 
@@ -110,23 +113,21 @@ def build_priors(
         return None
 
     gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
-    aux_vector_names = ""
-    for aux_vector in aux_vector_sources:
-        aux_vector_names += aux_vector.stem + "_"
 
-    file_name = f"water_priors_{gdf_bounds_4326.to_string()}_{osm_water}_{aux_vector_names}.pkl".replace(
-        " ", ""
-    )
-    cache_path = cache_dir / "water_priors_cache" / file_name
-    logging.info(f"Cache path: {cache_path}")
-    skip_cache = False
-
-    if use_cache and cache_path.exists():
-        logging.info(f"Loading water priors from cache: {cache_path}")
-        with open(cache_path, "rb") as f:
-            all_water = pickle.load(f)
-        # all_water = pickle.load(open(cache_path, "rb"))
+    if use_cache:
+        bounds = gdf_bounds_4326.geometry.total_bounds
+        polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
+        all_water, cache_found = check_db(
+            cache_dir=cache_dir,
+            polygon=polygon,
+            paths=aux_vector_sources,
+            water=osm_water,
+        )
     else:
+        cache_found = False
+
+    if not cache_found:
+        skip_cache = False
         all_vectors = []
 
         if osm_water:
@@ -160,11 +161,14 @@ def build_priors(
             vector_list=all_vectors, raster_src=raster_src
         )
 
-        if use_cache and not skip_cache:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(all_water, f)
-                # pickle.dump(all_water, open(cache_path, "wb"))
+        if use_cache and not skip_cache and all_water is not None:
+            add_to_db(
+                cache_dir=cache_dir,
+                polygon=polygon,
+                paths=aux_vector_sources,
+                gdf=all_water,
+                water=osm_water,
+            )
     if all_water is None:
         if queue is not None:
             queue.put(None)
@@ -202,22 +206,22 @@ def build_negative_priors(
         return None
 
     gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
-    aux_vector_names = ""
-    for aux_vector in aux_vector_sources:
-        aux_vector_names += aux_vector.stem + "_"
-    file_name = f"negative_priors_{gdf_bounds_4326.to_string()}_{osm_buildings}_{aux_vector_names}_{osm_roads}.pkl".replace(
-        " ", ""
-    )
-    cache_path = cache_dir / "negative_priors_cache" / file_name
-    skip_cache = False
-
-    if use_cache and cache_path.exists():
-        logging.info(f"Loading negative priors from cache: {cache_path}")
-        with open(cache_path, "rb") as f:
-            all_negative_priors = pickle.load(f)
-        # all_negative_priors = pickle.load(open(cache_path, "rb"))
+    if use_cache:
+        bounds = gdf_bounds_4326.geometry.total_bounds
+        polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
+        all_negative_priors, cache_found = check_db(
+            cache_dir=cache_dir,
+            polygon=polygon,
+            paths=aux_vector_sources,
+            roads=osm_roads,
+            buildings=osm_buildings,
+        )
 
     else:
+        cache_found = False
+
+    if not cache_found:
+        skip_cache = False
         all_vectors = []
 
         if osm_buildings:
@@ -243,12 +247,15 @@ def build_negative_priors(
             vector_list=all_vectors, raster_src=raster_src
         )
 
-        if use_cache and not skip_cache:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(all_negative_priors, f)
-
-            # pickle.dump(all_negative_priors, open(cache_path, "wb"))
+        if use_cache and not skip_cache and all_negative_priors is not None:
+            add_to_db(
+                cache_dir=cache_dir,
+                polygon=polygon,
+                paths=aux_vector_sources,
+                gdf=all_negative_priors,
+                roads=osm_roads,
+                buildings=osm_buildings,
+            )
 
     if all_negative_priors is None:
         if queue is not None:

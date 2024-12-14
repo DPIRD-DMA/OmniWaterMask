@@ -1,5 +1,6 @@
-from setuptools import find_packages, setup
 import os
+
+from setuptools import find_packages, setup
 
 version = {}
 with open(os.path.join("omniwatermask", "__version__.py")) as fp:
@@ -19,10 +20,11 @@ setup(
     packages=find_packages(),
     install_requires=[
         "omnicloudmask>=1.0.7",
-        "c2v>=4.9",
+        "opencv-python>=4.9.0.80",
         "geopandas>=0.14.4",
         "osmnx>=2.0.0",
         "scipy>=1.10.0",
+        "pyarrow>=10.0.0",
     ],
     classifiers=[
         "License :: OSI Approved :: MIT License",

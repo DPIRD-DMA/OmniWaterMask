@@ -9,10 +9,8 @@ import numpy as np
 import rasterio as rio
 import torch
 from omnicloudmask import predict_from_array
-from omnicloudmask.model_utils import load_model, load_model_from_weights
 from scipy.optimize import minimize_scalar
 
-from .download_models import get_models
 from .prior_builders import build_negative_priors, build_priors
 
 

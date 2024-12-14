@@ -15,6 +15,7 @@ from tqdm.auto import tqdm
 from .__version__ import __version__
 from .download_models import get_models
 from .raster_helpers import export_to_disk, resample_input
+from .vector_cache import initialize_db
 from .water_inf_helpers import integrate_water_detection_methods
 
 
@@ -81,7 +82,6 @@ def extract_water_debug(
     cache_dir: Path = Path.cwd() / "water_vectors_cache",
     regression_model: bool = False,
 ) -> list[Path]:
-
     vector_priors = use_osm or aux_vector_sources
     if not vector_priors:
         if not use_model:
@@ -92,6 +92,8 @@ def extract_water_debug(
             raise ValueError(
                 "If not using vector priors (OSM or aux_vector_sources), you must enable use_ndwi"
             )
+    if use_cache:
+        initialize_db(cache_dir)
     if isinstance(scene_paths, (str, Path)):
         scene_paths_list = [Path(scene_paths)]
     elif isinstance(scene_paths, list):
@@ -204,7 +206,6 @@ def extract_water(
     use_osm_roads: bool = True,
     cache_dir: Path = Path.cwd() / "water_vectors_cache",
 ) -> list[Path]:
-
     # make sure the scene_paths is a list of paths
     if isinstance(scene_paths, (str, Path)):
         scene_paths_list = [Path(scene_paths)]
@@ -214,7 +215,8 @@ def extract_water(
         raise ValueError(
             "scene_paths must be a list of Paths (or strings) or a path (or string)"
         )
-
+    if use_cache:
+        initialize_db(cache_dir)
     inference_dtype_torch = get_torch_dtype(inference_dtype)
     inference_device_torch = torch.device(inference_device)
     models = collect_models(
