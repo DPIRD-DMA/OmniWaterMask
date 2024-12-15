@@ -8,7 +8,7 @@ from typing import List
 import geopandas as gpd
 from shapely.geometry import Polygon
 
-DB_NAME = "geodataframes.db"
+DB_NAME = "geodataframes_v1.db"
 GDF_DIR = "gdfs"
 
 

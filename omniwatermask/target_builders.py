@@ -8,11 +8,14 @@ import osmnx as ox
 import pandas as pd
 import rasterio as rio
 import torch
+from packaging import version
 from pyproj import CRS
 from shapely.geometry import box
 
 from .raster_helpers import rasterize_vector
 from .vector_cache import add_to_db, check_db
+
+REQUIRED_VERSION = "2.0.0"
 
 
 def get_osm_features(
@@ -127,6 +130,14 @@ def build_targets(
             return queue
         return None
 
+    if osm_water or osm_roads or osm_buildings:
+        if version.parse(ox.__version__) < version.parse(REQUIRED_VERSION):
+            raise ImportError(
+                f"Your installed version of osmnx ({ox.__version__}) is too old. "
+                f"This library requires osmnx version {REQUIRED_VERSION} or above. "
+                f"Please upgrade using 'pip install osmnx>=2.0.0'."
+            )
+
     gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
 
     if use_cache:
@@ -168,8 +179,8 @@ def build_targets(
         combined_vectors = combine_vector_targets(
             vector_list=all_vectors, raster_src=raster_src
         )
-
-        if use_cache and combined_vectors is not None:
+        #  add to cache if we are using it, the vectors are not empty, and we did not find a cache
+        if use_cache and combined_vectors is not None and not cache_found:
             add_to_db(
                 cache_dir=cache_dir,
                 polygon=polygon,

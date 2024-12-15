@@ -1,8 +1,8 @@
 from .__version__ import __version__
-from .water_inf_pipeline import extract_water, extract_water_debug
+from .water_inf_pipeline import make_water_mask, make_water_mask_debug
 
 __all__ = [
-    "extract_water",
-    "extract_water_debug",
+    "make_water_mask",
+    "make_water_mask_debug",
     "__version__",
 ]

@@ -294,7 +294,7 @@ def integrate_water_detection_methods(
     use_cache: bool = True,
     patch_sizes: list[int] = [200, 400, 800, 1000],
     debug_output: bool = False,
-    use_osm: bool = True,
+    use_osm_water: bool = True,
     use_ndwi: bool = True,
     use_model: bool = True,
     use_osm_building_mask: bool = True,
@@ -328,7 +328,7 @@ def integrate_water_detection_methods(
         target=build_targets,
         kwargs={
             "raster_src": rio.open(input_path),
-            "osm_water": use_osm,
+            "osm_water": use_osm_water,
             "aux_vector_sources": aux_vector_sources,
             "device": mosaic_device,
             "cache_dir": cache_dir,
