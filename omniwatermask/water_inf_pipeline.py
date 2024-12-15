@@ -62,7 +62,7 @@ def extract_water_debug(
     model_path: list[str] | list[Path] | str | Path = "",
     output_dir: Optional[Path] = None,
     debug_output: bool = False,
-    mosaic_device: str = "cuda",
+    mosaic_device: Union[str, torch.device] = default_device(),
     use_osm: bool = True,
     use_model: bool = True,
     use_ndwi: bool = True,
@@ -71,8 +71,8 @@ def extract_water_debug(
     aux_vector_sources: list[Path] = [],
     aux_negative_vector_sources: list[Path] = [],
     resample_res: Optional[Union[int, float]] = None,
-    inference_dtype: str = "bf16",
-    inference_device: str = "cuda",
+    inference_dtype: Union[torch.dtype, str] = torch.float32,
+    inference_device: Union[str, torch.device] = default_device(),
     inference_patch_size: int = 1000,
     inference_overlap_size: int = 300,
     no_data_value: int = 0,
@@ -80,17 +80,16 @@ def extract_water_debug(
     use_cache: bool = True,
     optimise_model: bool = True,
     cache_dir: Path = Path.cwd() / "water_vectors_cache",
-    regression_model: bool = False,
 ) -> list[Path]:
-    vector_priors = use_osm or aux_vector_sources
-    if not vector_priors:
+    vector_targets = use_osm or aux_vector_sources
+    if not vector_targets:
         if not use_model:
             raise ValueError(
-                "If not using vector priors (OSM or aux_vector_sources), you must enable use_model"
+                "If not using vector targets (OSM or aux_vector_sources), you must enable use_model"
             )
         if not use_ndwi:
             raise ValueError(
-                "If not using vector priors (OSM or aux_vector_sources), you must enable use_ndwi"
+                "If not using vector targets (OSM or aux_vector_sources), you must enable use_ndwi"
             )
     if use_cache:
         initialize_db(cache_dir)
@@ -106,12 +105,13 @@ def extract_water_debug(
     inference_dtype_torch = get_torch_dtype(inference_dtype)
     inference_device_torch = torch.device(inference_device)
     models = collect_models(
-        model_path="",
+        model_path=model_path,
         inference_device=inference_device_torch,
         inference_dtype=inference_dtype_torch,
     )
 
-    p_bar = tqdm(total=len(scene_paths_list))
+    p_bar = tqdm(total=len(scene_paths_list), desc=f"Using {inference_device}")
+
     output_paths = []
 
     for input_image in scene_paths_list:
@@ -149,7 +149,6 @@ def extract_water_debug(
             input_bands=input_bands,
             input_path=input_image,
             debug_output=debug_output,
-            model_path=model_path,
             inference_dtype=inference_dtype_torch,
             inference_device=inference_device_torch,
             inference_patch_size=inference_patch_size,
@@ -166,7 +165,6 @@ def extract_water_debug(
             cache_dir=cache_dir,
             use_cache=use_cache,
             optimise_model=optimise_model,
-            regression_model=regression_model,
             no_data_value=no_data_value,
             models=models,
         )
@@ -216,16 +214,23 @@ def extract_water(
             "scene_paths must be a list of Paths (or strings) or a path (or string)"
         )
     if use_cache:
+        logging.info(f"Using cache at {cache_dir}")
         initialize_db(cache_dir)
+
     inference_dtype_torch = get_torch_dtype(inference_dtype)
+    logging.info(f"Using {inference_dtype} for inference")
     inference_device_torch = torch.device(inference_device)
+    logging.info(f"Using {inference_device} for inference")
+
+    logging.info("Collecting models")
     models = collect_models(
         model_path="",
         inference_device=inference_device_torch,
         inference_dtype=inference_dtype_torch,
     )
+    logging.info(f"Using {len(models)} models")
 
-    p_bar = tqdm(total=len(scene_paths_list))
+    p_bar = tqdm(total=len(scene_paths_list), desc=f"Using {inference_device}")
     output_paths = []
 
     for input_image in scene_paths_list:

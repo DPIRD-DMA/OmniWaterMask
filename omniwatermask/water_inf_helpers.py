@@ -11,7 +11,7 @@ import torch
 from omnicloudmask import predict_from_array
 from scipy.optimize import minimize_scalar
 
-from .prior_builders import build_negative_priors, build_priors
+from .target_builders import build_targets
 
 
 def get_masked_iou(
@@ -291,7 +291,6 @@ def integrate_water_detection_methods(
     inference_overlap_size: int,
     batch_size: int,
     models: list[torch.nn.Module],
-    model_path: list[str] | list[Path] | str | Path = "",
     use_cache: bool = True,
     patch_sizes: list[int] = [200, 400, 800, 1000],
     debug_output: bool = False,
@@ -305,13 +304,12 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-    regression_model: bool = False,
 ) -> tuple[np.ndarray, list[str]]:
-    """Combine the NDWI, model predictions and vector priors"""
+    """Combine the NDWI, model predictions and vector targets"""
     combined_water = []
     model_target = []
     ndwi_target = []
-    negative_prior = []
+    negative_target = []
     logging.info("Integrating water detection methods")
     ndwi_conf_tensor = get_NDWI(input_bands=input_bands, mosaic_device=mosaic_device)
 
@@ -320,14 +318,14 @@ def integrate_water_detection_methods(
         mosaic_device
     )
     no_data_mask = no_data_mask.to(inference_dtype)
-    negative_prior.append(no_data_mask)
+    negative_target.append(no_data_mask)
 
     ndwi_conf_tensor = ndwi_conf_tensor.to(inference_dtype)
 
-    logging.info("Building vector prior in thread")
-    vector_prior_result_queue = Queue()
-    vector_prior_thread = Thread(
-        target=build_priors,
+    logging.info("Building vector target in thread")
+    vector_target_result_queue = Queue()
+    vector_target_thread = Thread(
+        target=build_targets,
         kwargs={
             "raster_src": rio.open(input_path),
             "osm_water": use_osm,
@@ -335,16 +333,16 @@ def integrate_water_detection_methods(
             "device": mosaic_device,
             "cache_dir": cache_dir,
             "use_cache": use_cache,
-            "queue": vector_prior_result_queue,
+            "queue": vector_target_result_queue,
         },
     )
-    vector_prior_thread.start()
+    vector_target_thread.start()
 
     if use_osm_building_mask or use_osm_roads_mask:
-        logging.info("Building negative priors in thread")
-        negative_prior_result_queue = Queue()
-        negative_prior_thread = Thread(
-            target=build_negative_priors,
+        logging.info("Building negative targets in thread")
+        negative_target_result_queue = Queue()
+        negative_target_thread = Thread(
+            target=build_targets,
             kwargs={
                 "raster_src": rio.open(input_path),
                 "osm_buildings": use_osm_building_mask,
@@ -353,31 +351,23 @@ def integrate_water_detection_methods(
                 "device": mosaic_device,
                 "cache_dir": cache_dir,
                 "use_cache": use_cache,
-                "queue": negative_prior_result_queue,
+                "queue": negative_target_result_queue,
             },
         )
-        negative_prior_thread.start()
+        negative_target_thread.start()
 
     if use_model:
         logging.info("Predicting water mask using custom model")
 
-        if regression_model:
-            class_count = 1
-        else:
-            class_count = 2
-        if regression_model:
-            sf_model = False
-        else:
-            sf_model = True
         model_conf = predict_from_array(
             input_bands[:4],
             custom_models=models,
             batch_size=batch_size,
             inference_dtype=inference_dtype,
             export_confidence=True,
-            softmax_output=sf_model,
+            softmax_output=True,
             no_data_value=no_data_value,
-            pred_classes=class_count,
+            pred_classes=2,
             inference_device=inference_device,
             mosaic_device=mosaic_device,
             patch_size=inference_patch_size,
@@ -387,12 +377,7 @@ def integrate_water_detection_methods(
 
         model_conf_tensor = model_conf_tensor.to(inference_dtype)
 
-        if regression_model:
-            model_conf = torch.nan_to_num(model_conf_tensor)
-            model_conf_tensor = (model_conf_tensor[0]) - 0.15  # 0.5
-
-        else:
-            model_conf_tensor = model_conf_tensor[1] - model_conf_tensor[0]
+        model_conf_tensor = model_conf_tensor[1] - model_conf_tensor[0]
 
         model_binary = model_conf_tensor > 0.0
 
@@ -401,25 +386,25 @@ def integrate_water_detection_methods(
         model_conf_tensor = None
         model_binary = None
 
-    logging.info("Waiting for vector priors to finish")
-    vector_prior_thread.join()
-    vector_priors = vector_prior_result_queue.get()
+    logging.info("Waiting for vector targets to finish")
+    vector_target_thread.join()
+    vector_targets = vector_target_result_queue.get()
 
-    if vector_priors is not None:
-        model_target.append(vector_priors)
-        ndwi_target.append(vector_priors)
+    if vector_targets is not None:
+        model_target.append(vector_targets)
+        ndwi_target.append(vector_targets)
 
     if use_osm_building_mask or use_osm_roads_mask:
-        logging.info("Waiting for negative priors to finish")
-        negative_prior_thread.join()
-        vector_negative_prior = negative_prior_result_queue.get()
-        if vector_negative_prior is not None:
-            negative_prior.append(vector_negative_prior)
+        logging.info("Waiting for negative targets to finish")
+        negative_target_thread.join()
+        vector_negative_target = negative_target_result_queue.get()
+        if vector_negative_target is not None:
+            negative_target.append(vector_negative_target)
 
-    if len(negative_prior) > 0:
-        negative_prior = torch.stack(negative_prior).sum(0) > 0
+    if len(negative_target) > 0:
+        negative_target = torch.stack(negative_target).sum(0) > 0
     else:
-        negative_prior = None
+        negative_target = None
 
     if use_ndwi:
         logging.info("Optimising NDWI")
@@ -438,7 +423,7 @@ def integrate_water_detection_methods(
             source=ndwi_conf_tensor,
             target=ndwi_target,
             patch_sizes=patch_sizes,
-            mask=negative_prior,
+            mask=negative_target,
         )
         logging.info("Multi-scale optimisation accuracy finished")
         combined_water.append(NDWI_binary)
@@ -461,7 +446,7 @@ def integrate_water_detection_methods(
             model_binary_cleaned, _ = optimise_by_threshold_and_overlap(
                 source=model_conf_tensor,
                 target=model_target,
-                mask=negative_prior,
+                mask=negative_target,
                 scene_thresholds=(0, 1),
             )
 
@@ -488,13 +473,12 @@ def integrate_water_detection_methods(
                 "NDWI cumulative detections": NDWI_cumulative_detections,
                 "NDWI accuracy tracker": NDWI_accuracy_tracker,
                 "NDWI normalised accuracy": normalised_accuracy,
-                "NDWI prior": ndwi_target,
                 "Model binary cleaned": model_binary_cleaned,
                 "Model binary": model_binary,
                 "Model target": model_target,
                 "Model confidence": model_conf_tensor,
-                "Vector prior": vector_priors,
-                "Negative prior": negative_prior,
+                "Vector inputs": vector_targets,
+                "Negative vector inputs": negative_target,
             }
         )
     else:

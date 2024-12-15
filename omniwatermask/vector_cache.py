@@ -1,4 +1,5 @@
 import json
+import logging
 import sqlite3
 import uuid
 from pathlib import Path
@@ -8,7 +9,7 @@ import geopandas as gpd
 from shapely.geometry import Polygon
 
 DB_NAME = "geodataframes.db"
-GDF_DIR = "gdfs"  # Subdirectory for GDF files
+GDF_DIR = "gdfs"
 
 
 def initialize_db(cache_dir: Path) -> None:
@@ -71,9 +72,14 @@ def check_db(
         )
         row = cursor.fetchone()
         if row:
+            logging.info("Found matching GeoDataFrame in cache")
             gdf_path = gdf_dir / f"{row[0]}.parquet"
+            logging.info(f"Loading GeoDataFrame from {gdf_path}")
             if gdf_path.exists():
                 return gpd.read_parquet(gdf_path), True  # Load the GDF from disk
+            else:
+                logging.warning(f"GeoDataFrame file {gdf_path} not found")
+        logging.info("No matching GeoDataFrame found in cache")
         return gpd.GeoDataFrame(), False
 
 
@@ -134,3 +140,4 @@ def add_to_db(
             ),
         )
         conn.commit()
+        logging.info("Added GeoDataFrame to cache")
