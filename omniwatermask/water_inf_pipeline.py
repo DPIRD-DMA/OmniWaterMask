@@ -73,7 +73,7 @@ def make_water_mask(
     use_osm_water: bool = True,
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
-    cache_dir: Path = Path.cwd() / "water_vectors_cache",
+    cache_dir: Path = Path.cwd() / "OWM_cache",
 ) -> list[Path]:
     return make_water_mask_debug(
         scene_paths=scene_paths,

@@ -386,7 +386,8 @@ def integrate_water_detection_methods(
         model_conf_tensor = None
         model_binary = None
 
-    logging.info("Waiting for vector targets to finish")
+    if vector_target_thread.is_alive():
+        logging.info("Waiting for vector targets to finish")
     vector_target_thread.join()
     vector_targets = vector_target_result_queue.get()
 
@@ -395,7 +396,8 @@ def integrate_water_detection_methods(
         ndwi_target.append(vector_targets)
 
     if use_osm_building_mask or use_osm_roads_mask:
-        logging.info("Waiting for negative targets to finish")
+        if negative_target_thread.is_alive():
+            logging.info("Waiting for negative targets to finish")
         negative_target_thread.join()
         vector_negative_target = negative_target_result_queue.get()
         if vector_negative_target is not None:

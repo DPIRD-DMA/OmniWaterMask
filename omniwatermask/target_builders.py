@@ -8,6 +8,7 @@ import osmnx as ox
 import pandas as pd
 import rasterio as rio
 import torch
+from osmnx._errors import InsufficientResponseError
 from packaging import version
 from pyproj import CRS
 from shapely.geometry import box
@@ -29,15 +30,7 @@ def get_osm_features(
             bbox=tuple(gpd_bbox),
             tags=tags,
         )
-    except Exception as e:
-        logging.info(
-            f"osmnx failed to locate data with tags: {tags} within bbox: {gpd_bbox}"
-        )
-        logging.info("This is likely due to no relevant data in the area.")
-        logging.info(e)
-
-        return gpd.GeoDataFrame()
-    if features.empty:
+    except InsufficientResponseError:
         logging.info(f"No features found with tags: {tags} within bbox: {gpd_bbox}")
         return gpd.GeoDataFrame()
 
@@ -167,8 +160,7 @@ def build_targets(
                     tags=tag,
                 )
                 if response.empty or response is None:
-                    if use_cache:
-                        logging.info(f"No {tag} features found")
+                    logging.info(f"No {tag} features found")
 
                 all_vectors.append(response)
 

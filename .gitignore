@@ -6,3 +6,4 @@ water_vectors_cache/*
 example/*
 omniwatermask.egg-info/*
 *.DS_Store
+OWM_cache/*
