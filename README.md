@@ -1,9 +1,6 @@
 # OmniWaterMask
 
-OmniWaterMask is a Python library for high accuracy water segmentation in high to moderate resolution satellite imagery.
-
-OmniWaterMask offers high accuracy while supporting a wide range of resolutions, sensors, and processing levels.
-
+OmniWaterMask is a Python library for high accuracy water segmentation in high to moderate resolution satellite imagery, supporting a wide range of resolutions, sensors, and processing levels.
 
 ## Features
 
@@ -11,7 +8,6 @@ OmniWaterMask offers high accuracy while supporting a wide range of resolutions,
 -   Any imagery processing level
 -   Only requires Red, Green, Blue and NIR bands
 -   Known to work well with Sentinel-2, Landsat 8, PlanetScope, Maxar and NAIP
--   Supports inference on cuda, mps and cpu
 
 ## Try in Colab
 
@@ -28,30 +24,37 @@ Paper coming soon...
 
 ## Installation
 
-To install the package, use one of the following command:
+To install the package, use one of the following commands:
+
+Make sure you are running Python 3.9 or above and  
 
 ```bash
+conda create -n owm python=3.12
+conda activate owm
+
 pip install omniwatermask
 ```
 
 ```bash
+conda create -n owm python=3.12
+conda activate owm
+
 pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 ```
 
 ## Usage
 
-To predict a water mask for a list of scenes simply pass a list of geotiff files to the extract_water function along with the band order for the Red, Green, Blue and NIR bands. Predictions are saved to disk along side the input as geotiffs, a list of predictions file paths is returned:
+To predict a water mask for a list of scenes simply pass a list of geotiff files to the make_water_mask function along with the band order for the Red, Green, Blue and NIR bands. Predictions are saved to disk along side the input as geotiffs, a list of predictions file paths is returned:
 
 ```python
 from pathlib import Path
-from omniwatermask import extract_water
+from omniwatermask import make_water_mask
 
-# Paths to scenes (L1C and or L2A)
 scene_paths = [Path("path/to/scene1.tif"), Path("path/to/scene2.tif")]
 
 # Predict water masks for scenes
-water_mask_path = extract_water(
-    input_images=[scene_paths],  # you can pass a list of images
+water_mask_path = make_water_mask(
+    scene_paths=[scene_paths],  # you can pass a list of images
     band_order=[1, 2, 3, 4],  # band order of the input images, expects RGB+NIR
 )
 ```
@@ -111,7 +114,7 @@ water_mask_path = extract_water(
 
 -    `use_osm_roads`: Whether to use OpenStreetMap road data to reduce false positives. Defaults to True
 
--    `cache_dir`: Directory for storing cached vector data. Defaults to "water_vectors_cache" in current directory
+-    `cache_dir`: Directory for storing cached vector data. Defaults to "OWM_cache" in current directory
 
 
 ## Contributing
