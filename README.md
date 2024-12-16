@@ -63,7 +63,10 @@ water_mask_path = extract_water(
 ## Usage tips
 
 -   OWM requires an active internet connection to function properly, as it needs to download OpenStreetMap (OSM) data.
--   For NVIDIA GPU users, increasing the default 'batch_size' parameter can significantly improve processing performance.
+-   Hardware acceleration is strongly recommended:
+    -   NVIDIA GPU
+    -   Apple Silicon Mac
+    -   Other PyTorch-compatible accelerators
 -   Consider enabling "bf16" inference_dtype on compatible hardware - this typically results in faster processing speeds.
 -   If experiencing VRAM limitations even with batch_size=1, switching the 'mosaic_device' parameter to 'cpu' can help.
 -   Improve accuracy by providing known water body locations as 'aux_vector_sources' - simply pass a list of file paths pointing to your water polygon datasets.
