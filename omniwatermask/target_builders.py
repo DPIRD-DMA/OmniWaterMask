@@ -187,6 +187,8 @@ def build_targets(
                 paths=aux_vector_sources,
                 gdf=combined_vectors,
                 water=osm_water,
+                roads=osm_roads,
+                buildings=osm_buildings,
             )
     if combined_vectors is None:
         if queue is not None:

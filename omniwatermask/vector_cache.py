@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import List
 
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import Polygon
 
 DB_NAME = "geodataframes_v1.db"
@@ -83,19 +84,6 @@ def check_db(
         return gpd.GeoDataFrame(), False
 
 
-def open_cache_gdf(gdf_path: Path) -> gpd.GeoDataFrame:
-    """
-    Open a GeoDataFrame from a cache file.
-
-    Args:
-        gdf_path: Path to the cache file.
-
-    Returns:
-        The GeoDataFrame.
-    """
-    return gpd.read_parquet(gdf_path)
-
-
 def add_to_db(
     cache_dir: Path,
     polygon: Polygon,
@@ -141,3 +129,41 @@ def add_to_db(
         )
         conn.commit()
         logging.info("Added GeoDataFrame to cache")
+
+
+def view_cache_db(cache_dir: Path) -> pd.DataFrame:
+    """
+    Views the contents of the geodataframes database as a pandas DataFrame.
+
+    Args:
+        cache_dir: Directory where the database is stored
+
+    Returns:
+        pandas.DataFrame containing all records from the geodataframes table
+
+    """
+    db_path = cache_dir / DB_NAME
+
+    if not db_path.exists():
+        raise FileNotFoundError(f"Database not found at {db_path}")
+
+    try:
+        with sqlite3.connect(db_path) as conn:
+            # Read the entire table into a pandas DataFrame
+            query = "SELECT * FROM geodataframes"
+            df = pd.read_sql_query(query, conn)
+
+            # Convert the JSON string of paths back to a list
+            import json
+
+            df["paths"] = df["paths"].apply(json.loads)
+
+            # Convert boolean integers to actual booleans
+            bool_columns = ["water", "roads", "buildings"]
+            for col in bool_columns:
+                df[col] = df[col].astype(bool)
+
+            return df
+
+    except sqlite3.Error as e:
+        raise Exception(f"Error reading database: {str(e)}")
