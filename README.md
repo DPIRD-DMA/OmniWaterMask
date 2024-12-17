@@ -13,7 +13,7 @@ OmniWaterMask is a Python library for high accuracy water segmentation in high t
 
 [![Colab_Button]][Link]
 
-[Link]: https://colab.research.google.com/drive/********** 'Try OmniWaterMask In Colab'
+[Link]: https://colab.research.google.com/drive/15qgTgk4XiWcSzllNt4CtFU7pDSNrKLHk?usp=sharing 'Try OmniWaterMask In Colab'
 
 [Colab_Button]: https://img.shields.io/badge/Try%20in%20Colab-grey?style=for-the-badge&logo=google-colab
 
