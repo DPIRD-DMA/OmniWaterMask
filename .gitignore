@@ -7,3 +7,4 @@ example/*
 omniwatermask.egg-info/*
 *.DS_Store
 OWM_cache/*
+dist/*
