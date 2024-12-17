@@ -127,4 +127,4 @@ This project is licensed under the MIT License
 
 ## Acknowledgements
 
--   Special thanks to the [S1S2-Water dataset authors ](https://github.com/MWieland/s1s2_water) and [The FLAIR #1 dataset authors](https://ignf.github.io/FLAIR/) for providing the valuable training datasets.
+Special thanks to the [S1S2-Water dataset authors ](https://github.com/MWieland/s1s2_water) and [The FLAIR #1 dataset authors](https://ignf.github.io/FLAIR/) for providing the valuable training datasets.
