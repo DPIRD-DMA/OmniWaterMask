@@ -481,11 +481,14 @@ def integrate_water_detection_methods(
                 "Model confidence": model_conf_tensor,
                 "Vector inputs": vector_targets,
                 "Negative vector inputs": negative_target,
+                "No data mask": no_data_mask.float().numpy(force=True),
             }
         )
     else:
         final_output = combined_water.numpy(force=True).astype(np.uint8)
-        final_output = np.expand_dims(final_output, axis=0)
-        layer_names = ["Water predictions"]
+        no_data_mask_np = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
+        # final_output = np.expand_dims(final_output, axis=0)
+        final_output = np.stack([final_output, no_data_mask_np])
+        layer_names = ["Water predictions", "No data mask"]
 
     return final_output, layer_names

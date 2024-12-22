@@ -116,86 +116,99 @@ def build_targets(
     queue: Queue | None = None,
 ) -> torch.Tensor | None | Queue:
     """Combine vector for targets into a raster."""
-    if not osm_water and not osm_roads and not osm_buildings and not aux_vector_sources:
-        logging.info("No water targets to build")
-        if queue is not None:
-            queue.put(None)
-            return queue
-        return None
-
-    if osm_water or osm_roads or osm_buildings:
-        if version.parse(ox.__version__) < version.parse(REQUIRED_VERSION):
-            raise ImportError(
-                f"Your installed version of osmnx ({ox.__version__}) is too old. "
-                f"This library requires osmnx version {REQUIRED_VERSION} or above. "
-                f"Please upgrade using 'pip install osmnx>=2.0.0'."
-            )
-
-    gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
-
-    if use_cache:
-        bounds = gdf_bounds_4326.geometry.total_bounds
-        polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
-        combined_vectors, cache_found = check_db(
-            cache_dir=cache_dir,
-            polygon=polygon,
-            paths=aux_vector_sources,
-            water=osm_water,
-            roads=osm_roads,
-            buildings=osm_buildings,
-        )
-    else:
-        cache_found = False
-
-    if not cache_found:
-        all_vectors = []
-
-        for osm_type, tag in zip(
-            [osm_water, osm_roads, osm_buildings],
-            [OSM_water_tags, OSM_roads_tags, OSM_buildings_tags],
+    try:
+        if (
+            not osm_water
+            and not osm_roads
+            and not osm_buildings
+            and not aux_vector_sources
         ):
-            if osm_type:
-                response = get_osm_features(
-                    gdf_bounds_4326,
-                    tags=tag,
+            logging.info("No water targets to build")
+            if queue is not None:
+                queue.put(None)
+                return queue
+            return None
+
+        if osm_water or osm_roads or osm_buildings:
+            if version.parse(ox.__version__) < version.parse(REQUIRED_VERSION):
+                raise ImportError(
+                    f"Your installed version of osmnx ({ox.__version__}) is too old. "
+                    f"This library requires osmnx version {REQUIRED_VERSION} or above. "
+                    f"Please upgrade using 'pip install osmnx>=2.0.0'."
                 )
-                if response.empty or response is None:
-                    logging.info(f"No {tag} features found")
 
-                all_vectors.append(response)
+        gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
 
-        for source in aux_vector_sources:
-            logging.info(f"Adding aux vector source: {source.name}")
-            all_vectors.append(get_aux_data(bbox=gdf_bounds_4326, vector_path=source))
-
-        combined_vectors = combine_vector_targets(
-            vector_list=all_vectors, raster_src=raster_src
-        )
-        #  add to cache if we are using it, the vectors are not empty, and we did not find a cache
-        if use_cache and combined_vectors is not None and not cache_found:
-            add_to_db(
+        if use_cache:
+            bounds = gdf_bounds_4326.geometry.total_bounds
+            polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
+            combined_vectors, cache_found = check_db(
                 cache_dir=cache_dir,
                 polygon=polygon,
                 paths=aux_vector_sources,
-                gdf=combined_vectors,
                 water=osm_water,
                 roads=osm_roads,
                 buildings=osm_buildings,
             )
-    if combined_vectors is None:
+        else:
+            cache_found = False
+
+        if not cache_found:
+            all_vectors = []
+
+            for osm_type, tag in zip(
+                [osm_water, osm_roads, osm_buildings],
+                [OSM_water_tags, OSM_roads_tags, OSM_buildings_tags],
+            ):
+                if osm_type:
+                    response = get_osm_features(
+                        gdf_bounds_4326,
+                        tags=tag,
+                    )
+                    if response.empty or response is None:
+                        logging.info(f"No {tag} features found")
+
+                    all_vectors.append(response)
+
+            for source in aux_vector_sources:
+                logging.info(f"Adding aux vector source: {source.name}")
+                all_vectors.append(
+                    get_aux_data(bbox=gdf_bounds_4326, vector_path=source)
+                )
+
+            combined_vectors = combine_vector_targets(
+                vector_list=all_vectors, raster_src=raster_src
+            )
+            #  add to cache if we are using it, the vectors are not empty, and we did not find a cache
+            if use_cache and combined_vectors is not None and not cache_found:
+                add_to_db(
+                    cache_dir=cache_dir,
+                    polygon=polygon,
+                    paths=aux_vector_sources,
+                    gdf=combined_vectors,
+                    water=osm_water,
+                    roads=osm_roads,
+                    buildings=osm_buildings,
+                )
+        if combined_vectors is None:
+            if queue is not None:
+                queue.put(None)
+                return queue
+            return None
+
+        rasterized_targets = rasterize_vector(
+            gdf=combined_vectors, reference_profile=raster_src.profile
+        )
+
+        result = torch.from_numpy(rasterized_targets).to(torch.bool).to(device)
+
+        if queue is not None:
+            queue.put(result)
+            return queue
+        return result
+    except Exception as e:
+        logging.error(f"Error building targets: {e}")
         if queue is not None:
             queue.put(None)
             return queue
         return None
-
-    rasterized_targets = rasterize_vector(
-        gdf=combined_vectors, reference_profile=raster_src.profile
-    )
-
-    result = torch.from_numpy(rasterized_targets).to(torch.bool).to(device)
-
-    if queue is not None:
-        queue.put(result)
-        return queue
-
-    return result
