@@ -481,7 +481,7 @@ def integrate_water_detection_methods(
                 "Model confidence": model_conf_tensor,
                 "Vector inputs": vector_targets,
                 "Negative vector inputs": negative_target,
-                "No data mask": no_data_mask.float().numpy(force=True),
+                "No data mask": no_data_mask,
             }
         )
     else:

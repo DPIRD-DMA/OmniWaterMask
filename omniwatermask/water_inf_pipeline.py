@@ -159,7 +159,9 @@ def make_water_mask_debug(
     )
 
     # Set up the progress bar
-    p_bar = tqdm(total=len(scene_paths_list), desc=f"Using {inference_device}")
+    p_bar = tqdm(
+        total=len(scene_paths_list), desc=f"Using {inference_device}", leave=False
+    )
 
     output_paths = []
 
