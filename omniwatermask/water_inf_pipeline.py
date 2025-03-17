@@ -126,7 +126,7 @@ def make_water_mask_debug(
     cache_dir: Path = Path.cwd() / "water_vectors_cache",
 ) -> list[Path]:
     # Make sure that the correct options are set
-    if not use_osm_water or aux_vector_sources:
+    if not use_osm_water and not aux_vector_sources:
         if not use_model:
             raise ValueError(
                 "If not using vector targets (OSM or aux_vector_sources), you must enable use_model"
