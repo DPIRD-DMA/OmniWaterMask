@@ -44,7 +44,7 @@ pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 
 ## Usage
 
-To predict a water mask for a list of scenes simply pass a list of geotiff files to the make_water_mask function along with the band order for the Red, Green, Blue and NIR bands. Predictions are saved to disk along side the input as geotiffs, a list of predictions file paths is returned:
+To predict a water mask for a list of scenes simply pass a list of geotiff files to the make_water_mask function along with the band order for the Red, Green, Blue and NIR bands. Predictions are saved to disk along side the input as geotiffs, a list of prediction file paths is returned:
 
 ```python
 from pathlib import Path
@@ -115,6 +115,10 @@ water_mask_path = make_water_mask(
 -    `use_osm_roads`: Whether to use OpenStreetMap road data to reduce false positives. Defaults to True
 
 -    `cache_dir`: Directory for storing cached vector data. Defaults to "OWM_cache" in current directory
+
+-    `destination_model_dir`: Directory to save the model weights. Defaults to None
+
+-    `model_download_source`: Source from which to download the model weights. Defaults to "hugging_face", can also be "google_drive".
 
 
 ## Contributing
