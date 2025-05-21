@@ -21,6 +21,8 @@ from .water_inf_helpers import integrate_water_detection_methods
 
 def collect_models(
     model_path: list[str] | list[Path] | str | Path,
+    destination_model_dir: Union[str, Path, None],
+    model_download_source: str,
     inference_device: torch.device,
     inference_dtype: torch.dtype,
 ) -> list[torch.nn.Module]:
@@ -40,7 +42,9 @@ def collect_models(
             models.append(model)
     # if no model path is provided, use the default model
     else:
-        for model_details in get_models():
+        for model_details in get_models(
+            model_dir=destination_model_dir, source=model_download_source
+        ):
             models.append(
                 load_model_from_weights(
                     model_name=model_details["timm_model_name"],
@@ -74,6 +78,8 @@ def make_water_mask(
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
     cache_dir: Path = Path.cwd() / "OWM_cache",
+    destination_model_dir: Union[str, Path, None] = None,
+    model_download_source: str = "hugging_face",
 ) -> list[Path]:
     return make_water_mask_debug(
         scene_paths=scene_paths,
@@ -95,6 +101,8 @@ def make_water_mask(
         overwrite=overwrite,
         use_cache=use_cache,
         cache_dir=cache_dir,
+        destination_model_dir=destination_model_dir,
+        model_download_source=model_download_source,
     )
 
 
@@ -124,6 +132,8 @@ def make_water_mask_debug(
     use_cache: bool = True,
     optimise_model: bool = True,
     cache_dir: Path = Path.cwd() / "water_vectors_cache",
+    destination_model_dir: Union[str, Path, None] = None,
+    model_download_source: str = "hugging_face",
 ) -> list[Path]:
     # Make sure that the correct options are set
     if not use_osm_water and not aux_vector_sources:
@@ -154,6 +164,8 @@ def make_water_mask_debug(
     # Load the models
     models = collect_models(
         model_path=model_path,
+        destination_model_dir=destination_model_dir,
+        model_download_source=model_download_source,
         inference_device=inference_device_torch,
         inference_dtype=inference_dtype_torch,
     )
