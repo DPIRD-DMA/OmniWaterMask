@@ -25,6 +25,8 @@ setup(
         "osmnx>=2.0.0",
         "scipy>=1.10.0",
         "pyarrow>=10.0.0",
+        "huggingface_hub>=0.28.1",
+        "safetensors>=0.3.0",
     ],
     classifiers=[
         "License :: OSI Approved :: MIT License",
