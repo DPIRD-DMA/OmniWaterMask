@@ -2,6 +2,9 @@
 
 OmniWaterMask is a Python library for high accuracy water segmentation in high to moderate resolution satellite imagery, supporting a wide range of resolutions, sensors, and processing levels.
 
+[The OmniWaterMask paper is now published 🎉](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
+
+
 ## Features
 
 -   Process imagery resolutions from 0.2 m to 50 m.
@@ -19,8 +22,6 @@ OmniWaterMask is a Python library for high accuracy water segmentation in high t
 
 ## How it works
 OmniWaterMask integrates a sensor agnostic deep learning segmentation model with NDWI and vector datasets to detect water bodies within remote sensing products.
-
-Paper coming soon...
 
 ## Installation
 
