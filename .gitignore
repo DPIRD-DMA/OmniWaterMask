@@ -9,3 +9,4 @@ OWM_cache/*
 dist/*
 omniwatermask/models/models--NickWright--OmniWaterMask/*
 omniwatermask/models/.locks/*
+.python-version
