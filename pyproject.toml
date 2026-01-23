@@ -7,9 +7,10 @@ name = "omniwatermask"
 authors = [{name = "Nick Wright", email = "nicholas.wright@dpird.wa.gov.au"}]
 dynamic = ["version"]
 description = "Python library for water segmentation in high to moderate resolution remotely sensed imagery"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "omnicloudmask>=1.0.7",
+    "numpy>=2.0,<2.4",  # upper bound needed until numba supports numpy 2.4+
+    "omnicloudmask==1.6.0",
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
     "osmnx>=2.0.0",
