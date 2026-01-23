@@ -9,8 +9,8 @@ dynamic = ["version"]
 description = "Python library for water segmentation in high to moderate resolution remotely sensed imagery"
 requires-python = ">=3.10"
 dependencies = [
-    "numpy>=2.0,<2.4",  # upper bound needed until numba supports numpy 2.4+
-    "omnicloudmask==1.6.0",
+    "numpy>=2.0,<2.4", # upper bound needed until numba supports numpy 2.4+
+    "omnicloudmask>=1.7.0",
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
     "osmnx>=2.0.0",
@@ -24,6 +24,7 @@ dependencies = [
     "torch>=2.3.0",
     "tqdm>=4.0",
     "platformdirs>=4.0.0",
+    "fastai>=2.7",
 ]
 license = "MIT"
 readme = {file = "README.md", content-type = "text/markdown"}

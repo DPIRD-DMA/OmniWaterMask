@@ -2634,29 +2634,30 @@ wheels = [
 
 [[package]]
 name = "omnicloudmask"
-version = "1.6.0"
+version = "1.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "fastai" },
     { name = "gdown" },
     { name = "huggingface-hub" },
     { name = "platformdirs" },
     { name = "rasterio", version = "1.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "rasterio", version = "1.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "safetensors" },
+    { name = "segmentation-models-pytorch" },
     { name = "timm" },
     { name = "torch" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/69/54/dbb92308a7dc663a0fd295e03f14776dcfa815e08bf9ff3a17a3a408be7c/omnicloudmask-1.6.0.tar.gz", hash = "sha256:ccec81b44f97251faf6eac77d0f6c4f646444d298d1803089bb1922ed6b13792", size = 29996, upload-time = "2025-09-08T03:19:43.801Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/20/c33b33923abe1bb5965e699a6ffc9a5afc4a4efe72bad8cb614af9516698/omnicloudmask-1.7.0.tar.gz", hash = "sha256:5583b9bb1e46469835bb61074c47a6037639e11323c9568bd87f059db4a7c1e9", size = 34235, upload-time = "2026-01-19T06:20:59.553Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/68/32/738c9ae2afc07aaa6545424e59cb7f2adb9f83e41f9d76be56ec84a5f5fe/omnicloudmask-1.6.0-py3-none-any.whl", hash = "sha256:4999415ba29f57b37cb89d40b8c66773a2755ef67c36f05007398a7ee7a376f6", size = 21535, upload-time = "2025-09-08T03:19:41.926Z" },
+    { url = "https://files.pythonhosted.org/packages/02/22/229bcaa7717a39235e2de4b013359894a569fb4c57c197dac412dc920bbb/omnicloudmask-1.7.0-py3-none-any.whl", hash = "sha256:f18338b2af063e048f076de705fa64bca89231196eafdfbbf47cc0674b5ecfb4", size = 24177, upload-time = "2026-01-19T06:20:57.401Z" },
 ]
 
 [[package]]
 name = "omniwatermask"
 source = { editable = "." }
 dependencies = [
+    { name = "fastai" },
     { name = "gdown" },
     { name = "geopandas" },
     { name = "huggingface-hub" },
@@ -2687,11 +2688,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "fastai", specifier = ">=2.7" },
     { name = "gdown", specifier = ">=5.1.0" },
     { name = "geopandas", specifier = ">=1.0" },
     { name = "huggingface-hub", specifier = ">=0.28.1" },
     { name = "numpy", specifier = ">=2.0,<2.4" },
-    { name = "omnicloudmask", specifier = "==1.6.0" },
+    { name = "omnicloudmask", specifier = ">=1.7.0" },
     { name = "opencv-python", specifier = ">=4.9.0.80" },
     { name = "osmnx", specifier = ">=2.0.0" },
     { name = "platformdirs", specifier = ">=4.0.0" },
@@ -4504,6 +4506,26 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ef/5e/e565bd73991d42023eb82bb99e51c5b3d9e2c588ca9d4b3e2cc1d3ca62a6/scipy-1.17.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:f9eb55bb97d00f8b7ab95cb64f873eb0bf54d9446264d9f3609130381233483f", size = 37457743, upload-time = "2026-01-10T21:30:34.819Z" },
     { url = "https://files.pythonhosted.org/packages/58/a8/a66a75c3d8f1fb2b83f66007d6455a06a6f6cf5618c3dc35bc9b69dd096e/scipy-1.17.0-cp314-cp314t-win_amd64.whl", hash = "sha256:1ff269abf702f6c7e67a4b7aad981d42871a11b9dd83c58d2d2ea624efbd1088", size = 37098574, upload-time = "2026-01-10T21:30:40.782Z" },
     { url = "https://files.pythonhosted.org/packages/56/a5/df8f46ef7da168f1bc52cd86e09a9de5c6f19cc1da04454d51b7d4f43408/scipy-1.17.0-cp314-cp314t-win_arm64.whl", hash = "sha256:031121914e295d9791319a1875444d55079885bbae5bdc9c5e0f2ee5f09d34ff", size = 25246266, upload-time = "2026-01-10T21:30:45.923Z" },
+]
+
+[[package]]
+name = "segmentation-models-pytorch"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pillow" },
+    { name = "safetensors" },
+    { name = "timm" },
+    { name = "torch" },
+    { name = "torchvision" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/15/fa/d5a29d49240fb10bdead608b4d0c6805684a8f63b1f65863502be65b1ca4/segmentation_models_pytorch-0.5.0.tar.gz", hash = "sha256:cabba8aced6ef7bdcd6288dd9e1dc2840848aa819d539c455bd07aeceb2fdf96", size = 105150, upload-time = "2025-04-17T10:43:45.755Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/62/a50e5ac6191a498ad631e54df13d7e2d7eeb1325b15ee9ea1ee3ec065aaa/segmentation_models_pytorch-0.5.0-py3-none-any.whl", hash = "sha256:c34e09047771aa4dd8878b4f899e8125700cd1f8f7db16e58c37204154151a05", size = 154789, upload-time = "2025-04-17T10:43:43.668Z" },
 ]
 
 [[package]]

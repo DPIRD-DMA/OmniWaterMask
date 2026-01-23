@@ -48,6 +48,7 @@ def collect_models(
             models.append(
                 load_model_from_weights(
                     model_name=model_details["timm_model_name"],
+                    model_library=model_details["model_library"],
                     weights_path=model_details["Path"],
                     device=inference_device,
                     dtype=inference_dtype,

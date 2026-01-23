@@ -106,6 +106,7 @@ def get_models(
         model_dir.mkdir(exist_ok=True)
         destination = model_dir / str(row["file_name"])
         timm_model_name = row["timm_model_name"]
+        model_library = row["model_library"]
 
         if not destination.exists() or force_download:
             download_file(file_id=file_id, destination=destination, source=source)
@@ -113,5 +114,11 @@ def get_models(
         elif destination.stat().st_size <= 1024 * 1024:
             download_file(file_id=file_id, destination=destination, source=source)
 
-        model_paths.append({"Path": destination, "timm_model_name": timm_model_name})
+        model_paths.append(
+            {
+                "Path": destination,
+                "timm_model_name": timm_model_name,
+                "model_library": model_library,
+            }
+        )
     return model_paths
