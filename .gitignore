@@ -10,3 +10,4 @@ dist/*
 omniwatermask/models/models--NickWright--OmniWaterMask/*
 omniwatermask/models/.locks/*
 .python-version
+uv.lock
