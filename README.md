@@ -1,5 +1,11 @@
 # OmniWaterMask
 
+[![image](https://img.shields.io/pypi/v/omniwatermask.svg)](https://pypi.python.org/pypi/omniwatermask)
+[![image](https://static.pepy.tech/badge/omniwatermask)](https://pepy.tech/project/omniwatermask)
+[![image](https://img.shields.io/conda/vn/conda-forge/omniwatermask.svg)](https://anaconda.org/conda-forge/omniwatermask)
+[![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/omniwatermask.svg)](https://anaconda.org/conda-forge/omniwatermask)
+[![Conda Recipe](https://img.shields.io/badge/recipe-omniwatermask-green.svg)](https://github.com/conda-forge/omniwatermask-feedstock)
+
 OmniWaterMask is a Python library for high accuracy water segmentation in high to moderate resolution satellite imagery, supporting a wide range of resolutions, sensors, and processing levels.
 
 [The OmniWaterMask paper is now published 🎉](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
@@ -25,23 +31,33 @@ OmniWaterMask integrates a sensor agnostic deep learning segmentation model with
 
 ## Installation
 
-To install the package, use one of the following commands:
+To use OmniWaterMask, you need to install the package. It is recommended to use a conda environment to avoid conflicts with other packages.
 
-Make sure you are running Python 3.9 or above and  
+### Create a new conda environment
 
 ```bash
 conda create -n owm python=3.12
 conda activate owm
+```
 
+### Install the package from conda-forge
+
+```bash
+conda install -c conda-forge omniwatermask
+```
+
+### Install the package using pip
+
+```bash
 pip install omniwatermask
 ```
 
-```bash
-conda create -n owm python=3.12
-conda activate owm
+### Install the package from source
 
+```bash
 pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 ```
+
 
 ## Usage
 
