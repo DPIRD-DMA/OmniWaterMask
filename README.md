@@ -31,25 +31,26 @@ OmniWaterMask integrates a sensor agnostic deep learning segmentation model with
 
 ## Installation
 
-To use OmniWaterMask, you need to install the package. It is recommended to use a conda environment to avoid conflicts with other packages.
-
-### Create a new conda environment
-
-```bash
-conda create -n owm python=3.12
-conda activate owm
-```
-
-### Install the package from conda-forge
-
-```bash
-conda install -c conda-forge omniwatermask
-```
+To use OmniWaterMask, you need to install the package. It is recommended to use an environment manager such as conda or uv to avoid conflicts with other packages.
 
 ### Install the package using pip
 
 ```bash
 pip install omniwatermask
+```
+
+### Install the package using uv
+
+```bash
+uv add omniwatermask
+```
+
+### Create a new conda environment and install from conda-forge
+
+```bash
+conda create -n owm python=3.12
+conda activate owm
+conda install -c conda-forge omniwatermask
 ```
 
 ### Install the package from source
