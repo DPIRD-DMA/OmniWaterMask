@@ -67,7 +67,8 @@ def check_db(
         cursor.execute(
             """
             SELECT gdf_uid FROM geodataframes
-            WHERE polygon = ? AND paths = ? AND water = ? AND roads = ? AND buildings = ?
+            WHERE polygon = ? AND paths = ?
+            AND water = ? AND roads = ? AND buildings = ?
         """,
             (polygon.wkt, json.dumps([str(p) for p in paths]), water, roads, buildings),
         )
@@ -166,4 +167,4 @@ def view_cache_db(cache_dir: Path) -> pd.DataFrame:
             return df
 
     except sqlite3.Error as e:
-        raise Exception(f"Error reading database: {str(e)}")
+        raise Exception(f"Error reading database: {str(e)}") from e

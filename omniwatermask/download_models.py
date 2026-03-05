@@ -14,7 +14,7 @@ from .__version__ import __version__ as omniwatermask_version
 
 def download_file_from_google_drive(file_id: str, destination: Path) -> None:
     """
-    Downloads a file from Google Drive and saves it at the given destination using gdown.
+    Downloads a file from Google Drive using gdown.
 
     Args:
         file_id (str): The ID of the file on Google Drive.
@@ -26,12 +26,14 @@ def download_file_from_google_drive(file_id: str, destination: Path) -> None:
 
 def download_file_from_hugging_face(destination: Path) -> None:
     """
-    Downloads a file from Hugging Face and saves it at the given destination using hf_hub_download.
-    Loads the resulting safetensors file and saves it as a PyTorch model state for compatibility with the rest of the codebase.
+    Downloads a file from Hugging Face using hf_hub_download.
+
+    Loads the resulting safetensors file and saves it as a PyTorch
+    model state for compatibility with the rest of the codebase.
 
     Args:
-        file_id (str): The ID of the file on Hugging Face.
-        destination (Path): The local path where the file should be saved.
+        destination (Path): The local path where the file should
+            be saved.
     """
     file_name = destination.stem
     safetensor_path = hf_hub_download(
@@ -72,12 +74,15 @@ def get_models(
     model_version: float = 1.0,
 ) -> list[dict]:
     """
-    Downloads the model weights from Google Drive and saves them locally.
+    Downloads the model weights and saves them locally.
 
     Args:
-        force_download (bool): Whether to force download the model weights even if they already exist locally.
-        model_dir (Union[str, Path, None]): The directory where the model weights should be saved.
-        source (str): The source from which the model weights should be downloaded. Currently, only "google_drive" or "hugging_face" are supported.
+        force_download (bool): Whether to force download the model
+            weights even if they already exist locally.
+        model_dir (Union[str, Path, None]): The directory where the
+            model weights should be saved.
+        source (str): The source from which to download. Currently
+            only "google_drive" or "hugging_face" are supported.
     """
 
     with (resources.files("omniwatermask") / "model_download_links.csv").open() as f:

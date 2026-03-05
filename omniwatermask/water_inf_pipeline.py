@@ -65,10 +65,10 @@ def make_water_mask(
     batch_size: int = 1,
     version: Union[str, int, float] = f"OmniWaterMask_{__version__}",
     output_dir: Optional[Path] = None,
-    mosaic_device: Union[str, torch.device] = default_device(),
-    inference_device: Union[str, torch.device] = default_device(),
-    aux_vector_sources: list[Path] = [],
-    aux_negative_vector_sources: list[Path] = [],
+    mosaic_device: Optional[Union[str, torch.device]] = None,
+    inference_device: Optional[Union[str, torch.device]] = None,
+    aux_vector_sources: Optional[list[Path]] = None,
+    aux_negative_vector_sources: Optional[list[Path]] = None,
     inference_dtype: Union[torch.dtype, str] = torch.float32,
     no_data_value: int = 0,
     inference_patch_size: int = 1000,
@@ -78,10 +78,20 @@ def make_water_mask(
     use_osm_water: bool = True,
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
-    cache_dir: Path = Path.cwd() / "OWM_cache",
+    cache_dir: Optional[Path] = None,
     destination_model_dir: Union[str, Path, None] = None,
     model_download_source: str = "hugging_face",
 ) -> list[Path]:
+    if mosaic_device is None:
+        mosaic_device = default_device()
+    if inference_device is None:
+        inference_device = default_device()
+    if aux_vector_sources is None:
+        aux_vector_sources = []
+    if aux_negative_vector_sources is None:
+        aux_negative_vector_sources = []
+    if cache_dir is None:
+        cache_dir = Path.cwd() / "OWM_cache"
     return make_water_mask_debug(
         scene_paths=scene_paths,
         band_order=band_order,
@@ -115,36 +125,49 @@ def make_water_mask_debug(
     model_path: list[str] | list[Path] | str | Path = "",
     output_dir: Optional[Path] = None,
     debug_output: bool = False,
-    mosaic_device: Union[str, torch.device] = default_device(),
+    mosaic_device: Optional[Union[str, torch.device]] = None,
     use_osm_water: bool = True,
     use_model: bool = True,
     use_ndwi: bool = True,
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
-    aux_vector_sources: list[Path] = [],
-    aux_negative_vector_sources: list[Path] = [],
+    aux_vector_sources: Optional[list[Path]] = None,
+    aux_negative_vector_sources: Optional[list[Path]] = None,
     resample_res: Optional[Union[int, float]] = None,
     inference_dtype: Union[torch.dtype, str] = torch.float32,
-    inference_device: Union[str, torch.device] = default_device(),
+    inference_device: Optional[Union[str, torch.device]] = None,
     inference_patch_size: int = 1000,
     inference_overlap_size: int = 300,
     no_data_value: int = 0,
     overwrite: bool = True,
     use_cache: bool = True,
     optimise_model: bool = True,
-    cache_dir: Path = Path.cwd() / "water_vectors_cache",
+    cache_dir: Optional[Path] = None,
     destination_model_dir: Union[str, Path, None] = None,
     model_download_source: str = "hugging_face",
 ) -> list[Path]:
+    if mosaic_device is None:
+        mosaic_device = default_device()
+    if inference_device is None:
+        inference_device = default_device()
+    if aux_vector_sources is None:
+        aux_vector_sources = []
+    if aux_negative_vector_sources is None:
+        aux_negative_vector_sources = []
+    if cache_dir is None:
+        cache_dir = Path.cwd() / "water_vectors_cache"
+
     # Make sure that the correct options are set
     if not use_osm_water and not aux_vector_sources:
         if not use_model:
             raise ValueError(
-                "If not using vector targets (OSM or aux_vector_sources), you must enable use_model"
+                "If not using vector targets (OSM or "
+                "aux_vector_sources), you must enable use_model"
             )
         if not use_ndwi:
             raise ValueError(
-                "If not using vector targets (OSM or aux_vector_sources), you must enable use_ndwi"
+                "If not using vector targets (OSM or "
+                "aux_vector_sources), you must enable use_ndwi"
             )
 
     if use_cache:
@@ -179,7 +202,7 @@ def make_water_mask_debug(
     output_paths = []
 
     for input_image in scene_paths_list:
-        # if no output directory is provided, save the output in the same directory as the input image
+        # if no output dir provided, save alongside the input
         if output_dir is None:
             output_dir_set = input_image.parent
         else:

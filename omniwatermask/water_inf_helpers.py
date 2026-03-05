@@ -25,7 +25,8 @@ def get_masked_iou(
 
     Args:
         source: Binary tensor (0s and 1s)
-        target: Binary tensor (0s and 1s) or weighted tensor (0, 1, 2, etc.) if weighted=True
+        target: Binary tensor (0s and 1s) or weighted tensor
+            (0, 1, 2, etc.) if weighted=True
         mask: Optional mask tensor (True values are excluded from calculation)
         weighted: If True, treats target as weighted values instead of binary
 
@@ -77,8 +78,9 @@ def optimise_threshold(
 
 
 def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Get the intersection ratio of each cluster in the source image with the target image
-    returns a tensor of the same shape as the source image with the intersection ratios
+    """Get the intersection ratio of each cluster in the source
+    with the target. Returns a tensor of the same shape as the
+    source image with the intersection ratios.
     """
     source_np = source.numpy(force=True).astype(np.uint8)
 
@@ -120,7 +122,7 @@ def optimise_by_threshold_and_overlap(
     scene_threshold_steps: int = 20,
     cluster_ratio_steps: int = 15,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Optimise the agreement of the source image with the target image by thresholding and overlapping"""
+    """Optimise source-target agreement by thresholding and overlapping."""
     thresholded_source, _ = optimise_threshold(
         source=source,
         target=target,
@@ -158,7 +160,7 @@ def optimise_patches(
     max_thresh: float,
     mask: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Optimise the agreement of the source image with the target image by thresholding and overlapping in patches"""
+    """Optimise source-target agreement by thresholding in patches."""
     max_height, max_width = source.shape
 
     for top in range(0, max_height, patch_size):
@@ -199,8 +201,8 @@ def multi_scale_optimisation(
     min_thresh: float = -0.1,
     max_thresh: float = 0.4,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Optimise the agreement of the source image with the target image by thresholding and overlapping at multiple scales,
-    results of which are combined and further optimised to a binary output"""
+    """Optimise source-target agreement by thresholding at multiple
+    scales, combining results and further optimising to binary."""
 
     cumulative_detections, accuracy = optimise_threshold(
         source=source,
@@ -266,12 +268,12 @@ def make_composite_output(input_dict: dict) -> tuple[np.ndarray, list[str]]:
     output_layers = []
     layer_names = []
     # Get the shape of the first non-None layer
-    for key, value in input_dict.items():
+    for _key, value in input_dict.items():
         if value is not None:
             shape = value.shape
             break
     for key, value in input_dict.items():
-        #  if value is None set it to a zero tensor of the same shape, this avoids missing export layers
+        #  if value is None, use a zero tensor to avoid missing layers
         if value is None:
             logging.info(f"Layer {key} is None, setting to zero tensor")
             value = torch.zeros(shape, dtype=torch.float32)
@@ -292,20 +294,26 @@ def integrate_water_detection_methods(
     batch_size: int,
     models: list[torch.nn.Module],
     use_cache: bool = True,
-    patch_sizes: list[int] = [200, 400, 800, 1000],
+    patch_sizes: Optional[list[int]] = None,
     debug_output: bool = False,
     use_osm_water: bool = True,
     use_ndwi: bool = True,
     use_model: bool = True,
     use_osm_building_mask: bool = True,
     use_osm_roads_mask: bool = True,
-    aux_vector_sources: list[Path] = [],
-    aux_negative_vector_sources: list[Path] = [],
+    aux_vector_sources: Optional[list[Path]] = None,
+    aux_negative_vector_sources: Optional[list[Path]] = None,
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
 ) -> tuple[np.ndarray, list[str]]:
     """Combine the NDWI, model predictions and vector targets"""
+    if patch_sizes is None:
+        patch_sizes = [200, 400, 800, 1000]
+    if aux_vector_sources is None:
+        aux_vector_sources = []
+    if aux_negative_vector_sources is None:
+        aux_negative_vector_sources = []
     combined_water = []
     model_target = []
     ndwi_target = []
@@ -433,6 +441,8 @@ def integrate_water_detection_methods(
         model_target.append(ndwi_conf_tensor > 0.5)
 
     else:
+        NDWI_binary = None
+        ndwi_target = None
         NDWI_accuracy_tracker = None
         NDWI_cumulative_detections = None
         normalised_accuracy = None

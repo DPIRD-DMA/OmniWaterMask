@@ -69,10 +69,10 @@ def rasterize_vector(
         return out
 
     # simplify geometries to the pixel size to improve computation time
-    gdf = gdf.simplify(tolerance=pixel_size, preserve_topology=True)
+    gdf_simple = gdf.simplify(tolerance=pixel_size, preserve_topology=True)
 
     # Vectorized geometry extraction
-    shapes = list(((geom, 1) for geom in gdf.geometry))
+    shapes = list(((geom, 1) for geom in gdf_simple.geometry))
 
     # Use out parameter in rasterize
     features.rasterize(

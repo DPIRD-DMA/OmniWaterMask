@@ -27,7 +27,7 @@ def get_osm_features(
     gpd_bbox = gdf_bounds_4326.total_bounds
     try:
         features = ox.features_from_bbox(
-            bbox=tuple(gpd_bbox),
+            bbox=tuple(gpd_bbox),  # type: ignore
             tags=tags,
         )
     except InsufficientResponseError:
@@ -159,6 +159,7 @@ def build_targets(
             for osm_type, tag in zip(
                 [osm_water, osm_roads, osm_buildings],
                 [OSM_water_tags, OSM_roads_tags, OSM_buildings_tags],
+                strict=True,
             ):
                 if osm_type:
                     response = get_osm_features(
@@ -179,7 +180,7 @@ def build_targets(
             combined_vectors = combine_vector_targets(
                 vector_list=all_vectors, raster_src=raster_src
             )
-            #  add to cache if we are using it, the vectors are not empty, and we did not find a cache
+            #  add to cache if using it, vectors are not empty, and no cache found
             if use_cache and combined_vectors is not None and not cache_found:
                 add_to_db(
                     cache_dir=cache_dir,
