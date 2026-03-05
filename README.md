@@ -146,6 +146,10 @@ Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/
 -   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb) — Water segmentation on NAIP aerial imagery from HuggingFace
 -   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb) — Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
 
+## Changelog
+
+See [CHANGELOG.md](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/CHANGELOG.md) for a full list of changes across versions.
+
 ## Contributing
 
 Contributions are welcome! Please submit a pull request or open an issue to discuss any changes.
