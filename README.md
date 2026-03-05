@@ -139,6 +139,13 @@ water_mask_path = make_water_mask(
 -    `model_download_source`: Source from which to download the model weights. Defaults to "hugging_face", can also be "google_drive".
 
 
+## Examples
+
+Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/OmniWaterMask/tree/main/examples) directory:
+
+-   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb) — Water segmentation on NAIP aerial imagery from HuggingFace
+-   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb) — Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
+
 ## Contributing
 
 Contributions are welcome! Please submit a pull request or open an issue to discuss any changes.
