@@ -1,11 +1,23 @@
 {
     "cSpell.words": [
         "colorinterp",
+        "geotiff",
         "huggingface",
         "iterrows",
+        "maxiter",
         "ndarray",
+        "NDWI",
+        "normalised",
         "omnicloudmask",
         "omniwatermask",
-        "osmnx"
+        "optimisation",
+        "optimise",
+        "optimised",
+        "optimising",
+        "osmnx",
+        "pytestmark",
+        "thresholded",
+        "thresholding",
+        "xatol"
     ]
 }
