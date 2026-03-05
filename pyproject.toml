@@ -37,6 +37,7 @@ version = {attr = "omniwatermask.__version__.__version__"}
 dev = [
     "folium>=0.20.0",
     "jupyter>=1.1.1",
+    "pytest>=9.0.2",
     "ruff>=0.12.2",
     "s2mosaic>=0.3.2",
 ]
@@ -50,5 +51,14 @@ omniwatermask = ["model_download_links.csv"]
 [tool.setuptools]
 packages = ["omniwatermask"]
 
-[tool.ruff]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "e2e: end-to-end tests (require model downloads and real data processing)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.ruff.lint]
 select = ["E", "F", "B"]
