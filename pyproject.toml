@@ -10,7 +10,7 @@ description = "Python library for water segmentation in high to moderate resolut
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=2.0,<2.4", # upper bound needed until numba supports numpy 2.4+
-    "omnicloudmask>=1.7.0",
+    "omnicloudmask>=1.7.1",
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
     "osmnx>=2.0.0",

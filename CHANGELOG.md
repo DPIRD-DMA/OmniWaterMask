@@ -16,6 +16,7 @@
 - conda-forge installation instructions in README
 
 ### Changed
+- Updated OmniCloudMask dependency to v1.7.1 for MPS compatibility
 - Moved ruff lint config from deprecated `[tool.ruff]` to `[tool.ruff.lint]`
 - Added `strict=True` to `zip()` call in `build_targets` for safety
 - Cleaned up docstrings and comments to comply with line length limits
