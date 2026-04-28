@@ -1,6 +1,7 @@
 import numpy as np
 import geopandas as gpd
 import rasterio as rio
+import torch
 from shapely.geometry import box
 
 from omniwatermask.raster_helpers import (
@@ -79,6 +80,80 @@ class TestExportToDisk:
             assert src.count == 1
             data = src.read(1)
             assert np.all(data == 0)
+
+
+class TestExportToDiskLazyList:
+    """Tests for the lazy-list export path used by debug output.
+
+    The list path streams band-by-band, accepts mixed torch/numpy/None,
+    promotes everything to float32, and uses a BAND-interleaved tiled
+    GeoTIFF so per-band writes don't trigger costly recompression.
+    """
+
+    def test_writes_torch_tensors_as_float32(self, sample_geotiff, tmp_dir):
+        # bool/int8 tensors must round-trip as float32 on disk.
+        layers = [
+            torch.ones(100, 100, dtype=torch.bool),
+            torch.zeros(100, 100, dtype=torch.uint8),
+            (torch.arange(10000).reshape(100, 100) % 3),
+        ]
+        export_path = tmp_dir / "lazy.tif"
+        export_to_disk(layers, export_path, sample_geotiff, ["a", "b", "c"])
+        with rio.open(export_path) as src:
+            assert src.count == 3
+            assert src.dtypes == ("float32", "float32", "float32")
+            assert src.descriptions == ("a", "b", "c")
+            assert np.all(src.read(1) == 1.0)
+            assert np.all(src.read(2) == 0.0)
+            np.testing.assert_array_equal(
+                src.read(3),
+                (np.arange(10000).reshape(100, 100) % 3).astype(np.float32),
+            )
+
+    def test_none_entries_become_zero_band(self, sample_geotiff, tmp_dir):
+        layers = [torch.ones(100, 100), None, torch.full((100, 100), 7.0)]
+        export_path = tmp_dir / "none_band.tif"
+        export_to_disk(layers, export_path, sample_geotiff, ["x", "y", "z"])
+        with rio.open(export_path) as src:
+            assert src.count == 3
+            assert np.all(src.read(2) == 0.0)
+            assert np.all(src.read(3) == 7.0)
+
+    def test_uses_band_interleave_and_tiled_layout(
+        self, sample_geotiff, tmp_dir
+    ):
+        # Per-band writes only compress sanely with BAND interleave + tiles;
+        # this test pins that profile so a refactor can't silently regress
+        # back to PIXEL/strip layout (which made files ~6× larger).
+        layers = [torch.ones(100, 100), torch.zeros(100, 100)]
+        export_path = tmp_dir / "layout.tif"
+        export_to_disk(layers, export_path, sample_geotiff, ["a", "b"])
+        with rio.open(export_path) as src:
+            assert src.profile["interleave"] == "band"
+            assert src.profile.get("tiled") is True
+
+    def test_clears_input_list_during_write(self, sample_geotiff, tmp_dir):
+        # Memory contract: list slots are zeroed as bands are written so
+        # large source tensors can be freed before export completes.
+        layers: list = [torch.ones(100, 100), torch.zeros(100, 100)]
+        export_path = tmp_dir / "drained.tif"
+        export_to_disk(layers, export_path, sample_geotiff, ["a", "b"])
+        assert layers == [None, None]
+
+    def test_mixed_torch_and_numpy_inputs(self, sample_geotiff, tmp_dir):
+        layers = [
+            torch.full((100, 100), 2.5),
+            np.full((100, 100), 4, dtype=np.int32),
+            None,
+        ]
+        export_path = tmp_dir / "mixed.tif"
+        export_to_disk(layers, export_path, sample_geotiff, ["t", "n", "z"])
+        with rio.open(export_path) as src:
+            assert src.count == 3
+            assert src.dtypes[1] == "float32"
+            assert np.all(src.read(1) == 2.5)
+            assert np.all(src.read(2) == 4.0)
+            assert np.all(src.read(3) == 0.0)
 
 
 class TestRasterizeVector:

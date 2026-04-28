@@ -159,6 +159,9 @@ class TestMakeCompositeOutput:
         assert names == ["layer1", "layer2"]
 
     def test_handles_none_values(self):
+        # Lazy contract: None is passed through and materialised as zeros only
+        # at export time, so we never hold all 14 debug bands as float32 numpy
+        # at once on a full S2 tile.
         layers = {
             "present": torch.ones(10, 10),
             "missing": None,
@@ -166,9 +169,12 @@ class TestMakeCompositeOutput:
         output, names = make_composite_output(layers)
         assert isinstance(output, list)
         assert len(output) == 2
-        assert np.all(output[1] == 0)
+        assert output[1] is None
+        assert names == ["present", "missing"]
 
-    def test_output_dtype_is_float32(self):
+    def test_preserves_native_dtype(self):
+        # Lazy contract: dtype conversion happens in export_to_disk, not here.
         layers = {"a": torch.ones(5, 5, dtype=torch.int32)}
         output, _ = make_composite_output(layers)
-        assert output[0].dtype == np.float32
+        assert isinstance(output[0], torch.Tensor)
+        assert output[0].dtype == torch.int32

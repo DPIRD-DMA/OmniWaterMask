@@ -58,21 +58,29 @@ def optimise_threshold(
 ) -> tuple[torch.Tensor, float]:
     """Get the optimal threshold to align the source tensor with the target tensor."""
     device = source.device
-    thresholds = torch.linspace(min_thresh, max_thresh, num_steps, dtype=source.dtype, device=device)
+    thresholds = torch.linspace(
+        min_thresh, max_thresh, num_steps, dtype=source.dtype, device=device
+    )
 
     # Keep best_iou and best_thresh as device tensors — avoids one GPU→CPU sync per
     # threshold step (80 stalls → 2 total when running on MPS/CUDA).
     best_iou = torch.tensor(-1.0, dtype=torch.float32, device=device)
     best_thresh = torch.tensor(float(min_thresh), dtype=source.dtype, device=device)
 
+    # Mask out target pixels in-place to skip an extra full-tile alloc.
     target_f = target.float()
-    if mask is not None:
-        target_f = torch.where(mask.bool(), torch.zeros_like(target_f), target_f)
+    mask_bool = mask.bool() if mask is not None else None
+    if mask_bool is not None:
+        target_f.masked_fill_(mask_bool, 0.0)
 
     for thresh in thresholds:
-        binary = (source > thresh).float()
-        if mask is not None:
-            binary = binary * (~mask.bool()).float()
+        # Keep binary as bool until the float promotion is unavoidable; saves
+        # ~360 MB per iteration on a full S2 tile (480 MB float vs 120 MB bool).
+        binary_b = source > thresh
+        if mask_bool is not None:
+            binary_b &= ~mask_bool
+        binary = binary_b.float()
+        del binary_b
         intersection = (target_f * binary).sum()
         union = torch.maximum(binary, target_f).sum()
         iou = torch.where(union > 0, intersection / union, torch.zeros_like(union))
@@ -223,11 +231,11 @@ def optimise_patches(
             binary_f = binary_f * (~msk_b).unsqueeze(0).float()
 
         tgt_e = tgt_m.unsqueeze(0)  # (1, M, P, P)
-        inter = (tgt_e * binary_f).sum(dim=(-2, -1))   # (K, M)
+        inter = (tgt_e * binary_f).sum(dim=(-2, -1))  # (K, M)
         union = torch.maximum(binary_f, tgt_e).sum(dim=(-2, -1))  # (K, M)
         iou = torch.where(union > 0, inter / union, torch.zeros_like(inter))  # (K, M)
 
-        best_k = iou.argmax(dim=0)        # (M,)
+        best_k = iou.argmax(dim=0)  # (M,)
         best_iou = iou.max(dim=0).values  # (M,)
         best_thresh_vals = thresholds[best_k]  # (M,)
 
@@ -280,6 +288,7 @@ def multi_scale_optimisation(
                 patch_size=patch_size,
                 min_thresh=min_thresh,
                 max_thresh=max_thresh,
+                mask=mask,
             )
 
     normalised_accuracy = cumulative_detections / accuracy_tracker
@@ -321,19 +330,22 @@ def get_NDWI(
     return ndwi
 
 
-def make_composite_output(input_dict: dict) -> tuple[list[np.ndarray], list[str]]:
-    output_layers = []
-    layer_names = []
-    shape = None
-    for _key, value in input_dict.items():
-        if value is not None:
-            shape = value.shape
-            break
+def make_composite_output(
+    input_dict: dict,
+) -> tuple[list[Union[torch.Tensor, np.ndarray, None]], list[str]]:
+    """Return debug layers for export.
+
+    Layers are kept in their native form (torch tensor / numpy / None) and only
+    converted to float32 at write time, so we never materialise all 14 layers
+    as float32 numpy in memory at once. None placeholders are converted to
+    zeros lazily during export.
+    """
+    output_layers: list[Union[torch.Tensor, np.ndarray, None]] = []
+    layer_names: list[str] = []
     for key, value in input_dict.items():
         if value is None:
-            logging.info(f"Layer {key} is None, setting to zero tensor")
-            value = torch.zeros(shape, dtype=torch.float32)
-        output_layers.append(value.float().numpy(force=True).astype(np.float32))
+            logging.info(f"Layer {key} is None, will be filled with zeros at export")
+        output_layers.append(value)
         layer_names.append(key)
     return output_layers, layer_names
 
@@ -361,7 +373,11 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-) -> tuple[np.ndarray | list[np.ndarray], list[str], np.ndarray]:
+) -> tuple[
+    np.ndarray | list[Union[torch.Tensor, np.ndarray, None]],
+    list[str],
+    np.ndarray,
+]:
     """Combine the NDWI, model predictions and vector targets"""
     if patch_sizes is None:
         patch_sizes = [200, 400, 800, 1000]
@@ -468,14 +484,27 @@ def integrate_water_detection_methods(
             negative_target.append(vector_negative_target)
 
     if len(negative_target) > 0:
-        negative_target = torch.stack(negative_target).sum(0) > 0
+        # Iterative OR avoids the (N, H, W) stacked allocation that
+        # torch.stack(...).sum(0) > 0 materialises (~N×120 MB on a full S2 tile).
+        neg_iter = iter(negative_target)
+        negative_combined = next(neg_iter).bool().clone()
+        for t in neg_iter:
+            negative_combined |= t.bool()
+        negative_target = negative_combined
+        del negative_combined
     else:
         negative_target = None
 
     if use_ndwi:
         logging.info("Optimising NDWI")
         if len(ndwi_target) > 0:
-            ndwi_target = torch.stack(ndwi_target).sum(0)
+            # Accumulate weighted target as uint8 in-place — saves ~1 GB peak vs
+            # torch.stack(...).sum(0), which builds an (N,H,W) bool stack and
+            # then promotes the result to int64.
+            it = iter(ndwi_target)
+            ndwi_target = next(it).to(torch.uint8).clone()
+            for t in it:
+                ndwi_target += t.to(torch.uint8)
         else:
             ndwi_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
@@ -504,7 +533,10 @@ def integrate_water_detection_methods(
         normalised_accuracy = None
 
     if len(model_target) > 0:
-        model_target = torch.stack(model_target).sum(0)
+        it = iter(model_target)
+        model_target = next(it).to(torch.uint8).clone()
+        for t in it:
+            model_target += t.to(torch.uint8)
     else:
         model_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
@@ -528,7 +560,13 @@ def integrate_water_detection_methods(
         model_conf_tensor = None
         model_binary_cleaned = None
 
-    combined_water = torch.stack(combined_water).sum(0) > 0
+    # Final fusion: OR all binary water predictions together. Iterative OR
+    # avoids stacking (~N×120 MB) and the int64 sum allocation (~960 MB).
+    cw_iter = iter(combined_water)
+    combined_water = next(cw_iter).bool().clone()
+    for t in cw_iter:
+        combined_water |= t.bool()
+    del cw_iter
 
     valid_mask = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
 

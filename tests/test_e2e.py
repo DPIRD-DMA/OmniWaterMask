@@ -187,7 +187,7 @@ class TestIntegrateWaterDetectionReal:
         with rio.open(naip_crop) as src:
             bands = src.read(NAIP_BAND_ORDER).astype(np.float32)
 
-        result, layer_names = integrate_water_detection_methods(
+        result, layer_names, valid_mask = integrate_water_detection_methods(
             input_bands=bands,
             input_path=naip_crop,
             cache_dir=cache_dir,
@@ -207,11 +207,11 @@ class TestIntegrateWaterDetectionReal:
         )
 
         assert isinstance(result, np.ndarray)
-        assert result.shape == (2, 256, 256)
-        assert "Water predictions" in layer_names
-        assert "No data mask" in layer_names
-        # No-data mask should be all valid (no zeros in NAIP)
-        assert result[1].sum() > 0
+        assert result.shape == (1, 256, 256)
+        assert layer_names == ["Water predictions"]
+        # Valid mask should be all valid (no zeros in NAIP)
+        assert valid_mask.shape == (256, 256)
+        assert valid_mask.sum() > 0
 
     def test_real_debug_output(self, naip_crop, loaded_models, tmp_path):
         """Debug output should contain all diagnostic layers."""
@@ -221,7 +221,7 @@ class TestIntegrateWaterDetectionReal:
         with rio.open(naip_crop) as src:
             bands = src.read(NAIP_BAND_ORDER).astype(np.float32)
 
-        result, layer_names = integrate_water_detection_methods(
+        result, layer_names, valid_mask = integrate_water_detection_methods(
             input_bands=bands,
             input_path=naip_crop,
             cache_dir=cache_dir,
@@ -273,13 +273,16 @@ class TestFullPipelineReal:
         assert len(output_paths) == 1
         assert output_paths[0].exists()
         with rio.open(output_paths[0]) as src:
-            assert src.count == 2
+            assert src.count == 1
             assert src.height == 256
             assert src.width == 256
+            assert src.descriptions == ("Water predictions",)
             water = src.read(1)
             assert water.dtype == np.uint8
             # Water predictions should be binary
             assert set(np.unique(water)).issubset({0, 1})
+            # Internal mask band should be present (GDAL nodata band)
+            assert src.mask_flag_enums[0]  # mask flags exist for band 1
 
     def test_skips_existing_when_overwrite_false(self, naip_crop, tmp_path):
         output_dir = tmp_path / "output"
