@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 import geopandas as gpd
 import numpy as np
@@ -37,25 +37,51 @@ def resample_input(
 
 
 def export_to_disk(
-    array: np.ndarray, export_path: Path, source_path: Path, layer_names: list[str]
+    array: Union[np.ndarray, list[np.ndarray]],
+    export_path: Path,
+    source_path: Path,
+    layer_names: list[str],
+    mask: Optional[np.ndarray] = None,
 ):
-    """Export the array to disk as a GeoTIFF"""
+    """Export the array to disk as a GeoTIFF.
+
+    If `mask` is provided (2-D, 1=valid, 0=nodata), it is written as a GDAL
+    internal mask band so QGIS/GDAL render nodata pixels as transparent.
+    """
     src = rio.open(source_path)
+
+    if isinstance(array, list):
+        count = len(array)
+        dtype = array[0].dtype
+        height, width = array[0].shape
+    else:
+        count = array.shape[0]
+        dtype = array.dtype
+        height, width = array.shape[1], array.shape[2]
+
     profile = {
-        "dtype": array.dtype,
-        "count": array.shape[0],
+        "dtype": dtype,
+        "count": count,
         "compress": "lzw",
         "nodata": None,
         "driver": "GTiff",
-        "height": array.shape[1],
-        "width": array.shape[2],
+        "height": height,
+        "width": width,
         "transform": src.transform,
         "crs": src.crs,
     }
 
-    with rio.open(export_path, "w", **profile) as dst:
-        dst.write(array)
-        dst.descriptions = layer_names
+    with rio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rio.open(export_path, "w", **profile) as dst:
+            if isinstance(array, list):
+                stacked = np.stack(array)
+                dst.write(stacked)
+                del stacked
+            else:
+                dst.write(array)
+            dst.descriptions = tuple(layer_names)
+            if mask is not None:
+                dst.write_mask((mask.astype(np.uint8) * 255))
 
 
 def rasterize_vector(

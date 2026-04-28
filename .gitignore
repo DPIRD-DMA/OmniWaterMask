@@ -16,3 +16,13 @@ examples/data/naip_water_test.tif
 examples/OWM_cache/*
 examples/cache/*
 examples/data/*
+benchmark_data/*
+benchmark*.
+benchmark_*.py
+profile_*.py
+.gitignore
+.claude/*
+benchmark_debug_output/*
+__pycache__/*
+verify_rasterize_output.py
+compare_negative_masks.py

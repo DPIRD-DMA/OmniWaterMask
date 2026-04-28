@@ -233,7 +233,7 @@ def make_water_mask_debug(
         input_bands = input_src.read(band_order)
 
         logging.info(f"Predicting water mask for {input_image.name}")
-        water_predictions, layer_names = integrate_water_detection_methods(
+        water_predictions, layer_names, valid_mask = integrate_water_detection_methods(
             input_bands=input_bands,
             input_path=input_image,
             debug_output=debug_output,
@@ -262,6 +262,7 @@ def make_water_mask_debug(
             export_path=export_path,
             source_path=input_image,
             layer_names=layer_names,
+            mask=valid_mask,
         )
         p_bar.update(1)
     p_bar.refresh()

@@ -37,7 +37,7 @@ def get_osm_features(
     features = features.drop(columns=["nodes", "ways"], errors="ignore")
     features = features.to_crs("EPSG:4326")
     features = gpd.clip(features, gdf_bounds_4326)
-    return gpd.GeoDataFrame(features)
+    return gpd.GeoDataFrame(geometry=features.geometry, crs=features.crs)
 
 
 def get_wgs84_bounds_gdf_from_raster(

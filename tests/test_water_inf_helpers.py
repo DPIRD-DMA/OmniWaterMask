@@ -153,7 +153,9 @@ class TestMakeCompositeOutput:
             "layer2": torch.zeros(10, 10),
         }
         output, names = make_composite_output(layers)
-        assert output.shape == (2, 10, 10)
+        assert isinstance(output, list)
+        assert len(output) == 2
+        assert output[0].shape == (10, 10)
         assert names == ["layer1", "layer2"]
 
     def test_handles_none_values(self):
@@ -162,11 +164,11 @@ class TestMakeCompositeOutput:
             "missing": None,
         }
         output, names = make_composite_output(layers)
-        assert output.shape == (2, 10, 10)
-        # The None layer should be zeros
+        assert isinstance(output, list)
+        assert len(output) == 2
         assert np.all(output[1] == 0)
 
     def test_output_dtype_is_float32(self):
         layers = {"a": torch.ones(5, 5, dtype=torch.int32)}
         output, _ = make_composite_output(layers)
-        assert output.dtype == np.float32
+        assert output[0].dtype == np.float32

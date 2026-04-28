@@ -241,7 +241,8 @@ class TestIntegrateWaterDetectionReal:
             debug_output=True,
         )
 
-        assert result.ndim == 3
+        assert isinstance(result, list)
+        assert len(result) > 2
         assert len(layer_names) > 2
         assert "Water predictions" in layer_names
         assert "NDWI binary" in layer_names

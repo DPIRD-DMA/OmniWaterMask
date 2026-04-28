@@ -9,7 +9,6 @@ import numpy as np
 import rasterio as rio
 import torch
 from omnicloudmask import predict_from_array
-from scipy.optimize import minimize_scalar
 
 from .target_builders import build_targets
 
@@ -57,24 +56,32 @@ def optimise_threshold(
     max_thresh: float = 0.3,
     num_steps: int = 40,
 ) -> tuple[torch.Tensor, float]:
-    """Get the optimal threshold to align the source tensor with the target tensor"""
+    """Get the optimal threshold to align the source tensor with the target tensor."""
+    device = source.device
+    thresholds = torch.linspace(min_thresh, max_thresh, num_steps, dtype=source.dtype, device=device)
 
-    def objective(threshold):
-        return -get_masked_iou(
-            source=(source > threshold), target=target, mask=mask
-        )  # Negative because we want to maximize
+    # Keep best_iou and best_thresh as device tensors — avoids one GPU→CPU sync per
+    # threshold step (80 stalls → 2 total when running on MPS/CUDA).
+    best_iou = torch.tensor(-1.0, dtype=torch.float32, device=device)
+    best_thresh = torch.tensor(float(min_thresh), dtype=source.dtype, device=device)
 
-    result = minimize_scalar(
-        objective,
-        bounds=(min_thresh, max_thresh),
-        method="bounded",
-        options={"xatol": 0.0001, "maxiter": num_steps},
-    )
+    target_f = target.float()
+    if mask is not None:
+        target_f = torch.where(mask.bool(), torch.zeros_like(target_f), target_f)
 
-    optimal_threshold = result.x  # type: ignore
-    highest_accuracy = -result.fun  # type: ignore
+    for thresh in thresholds:
+        binary = (source > thresh).float()
+        if mask is not None:
+            binary = binary * (~mask.bool()).float()
+        intersection = (target_f * binary).sum()
+        union = torch.maximum(binary, target_f).sum()
+        iou = torch.where(union > 0, intersection / union, torch.zeros_like(union))
+        improved = iou > best_iou
+        best_iou = torch.where(improved, iou, best_iou)
+        best_thresh = torch.where(improved, thresh, best_thresh)
 
-    return source > optimal_threshold, float(highest_accuracy)
+    # Single sync per call to extract scalar results
+    return source > best_thresh.item(), best_iou.item()
 
 
 def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -83,34 +90,29 @@ def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.
     source image with the intersection ratios.
     """
     source_np = source.numpy(force=True).astype(np.uint8)
-
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+    num_labels, labels, _, _ = cv2.connectedComponentsWithStats(
         source_np, connectivity=8
     )
 
-    labeled_torch = torch.from_numpy(labels).to(source.device)
+    if num_labels <= 1:
+        return torch.zeros_like(source, dtype=torch.float32)
 
-    intersection_ratios = torch.zeros_like(source, dtype=torch.float32)
+    labeled = torch.from_numpy(labels).to(source.device)
+    lflat = labeled.view(-1).long()
+    tflat = target.view(-1).float()
+    ones = torch.ones(lflat.shape[0], dtype=torch.float32, device=source.device)
 
-    for label in range(1, num_labels):
-        min_col, min_row, width, height, _ = stats[label]
-        max_row, max_col = min_row + height, min_col + width
+    # Per-label pixel count and target overlap — O(H×W) scatter, no Python loop
+    comp_size = torch.zeros(num_labels, dtype=torch.float32, device=source.device)
+    comp_size.scatter_add_(0, lflat, ones)
 
-        cluster_mask_slice = (
-            labeled_torch[min_row:max_row, min_col:max_col] == label
-        ).float()
-        pred_slice = target[min_row:max_row, min_col:max_col].float()
+    tgt_sum = torch.zeros(num_labels, dtype=torch.float32, device=source.device)
+    tgt_sum.scatter_add_(0, lflat, tflat)
 
-        variable_cluster_sum = cluster_mask_slice.sum()
-        binary_cluster_sum = (cluster_mask_slice * pred_slice).sum()
+    ratios = tgt_sum / comp_size.clamp(min=1)
+    ratios[0] = 0.0  # background label
 
-        intersecting_ratio = binary_cluster_sum / variable_cluster_sum
-
-        intersection_ratios[min_row:max_row, min_col:max_col] += (
-            cluster_mask_slice * intersecting_ratio
-        )
-
-    return intersection_ratios
+    return ratios[lflat].view(source.shape)
 
 
 def optimise_by_threshold_and_overlap(
@@ -159,36 +161,90 @@ def optimise_patches(
     min_thresh: float,
     max_thresh: float,
     mask: Optional[torch.Tensor] = None,
+    _num_steps: int = 40,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Optimise source-target agreement by thresholding in patches."""
+    """Optimise source-target agreement by thresholding in patches.
+
+    Uses fully vectorized (K × M × P × P) threshold search: all candidate
+    thresholds and all patches in a mini-batch are evaluated in a single
+    tensor broadcast, eliminating all Python-level threshold iteration.
+    """
     max_height, max_width = source.shape
+    device = source.device
+
+    src_patches: list[torch.Tensor] = []
+    tgt_patches: list[torch.Tensor] = []
+    msk_patches: list[torch.Tensor] = []
+    coords: list[tuple[int, int, int, int]] = []
+
+    # Check empty patches on CPU to avoid one MPS sync per patch (thousands of stalls).
+    target_cpu = target.cpu() if target.device.type != "cpu" else target
 
     for top in range(0, max_height, patch_size):
         bottom = min(top + patch_size, max_height)
-        full_size_top = bottom - patch_size
-
+        fs_top = bottom - patch_size
         for left in range(0, max_width, patch_size):
             right = min(left + patch_size, max_width)
-            full_size_left = right - patch_size
-
-            target_patch = target[full_size_top:bottom, full_size_left:right]
+            fs_left = right - patch_size
+            if target_cpu[fs_top:bottom, fs_left:right].sum() == 0:
+                continue
+            src_patches.append(source[fs_top:bottom, fs_left:right])
+            tgt_patches.append(target[fs_top:bottom, fs_left:right])
             if mask is not None:
-                mask_patch = mask[full_size_top:bottom, full_size_left:right]
+                msk_patches.append(mask[fs_top:bottom, fs_left:right])
+            coords.append((top, bottom, left, right))
 
-            if target_patch.sum() != 0:
-                source_patch = source[full_size_top:bottom, full_size_left:right]
-                binary_source_patch, patch_accuracy = optimise_threshold(
-                    source=source_patch,
-                    target=target_patch,
-                    mask=mask_patch if mask is not None else None,
-                    min_thresh=min_thresh,
-                    max_thresh=max_thresh,
-                )
-                cumulative_detections[top:bottom, left:right] += (
-                    binary_source_patch[-(bottom - top) :, -(right - left) :].float()
-                    * patch_accuracy
-                )
-                accuracy_tracker[top:bottom, left:right] += patch_accuracy
+    if not src_patches:
+        return cumulative_detections, accuracy_tracker
+
+    thresholds = torch.linspace(
+        min_thresh, max_thresh, _num_steps, dtype=source.dtype, device=device
+    )
+
+    # Batch size: keep (K, M, P, P) float32 under ~256 MB.
+    # K * M * P^2 * 4 bytes < 256e6  →  M < 256e6 / (K * P^2 * 4)
+    _bytes_per_kpp = _num_steps * patch_size * patch_size * 4
+    batch_size = max(1, 256_000_000 // _bytes_per_kpp)
+
+    for b in range(0, len(src_patches), batch_size):
+        end = min(b + batch_size, len(src_patches))
+
+        src_b = torch.stack(src_patches[b:end])  # (M, P, P)
+        tgt_b = torch.stack(tgt_patches[b:end]).float()  # (M, P, P)
+        msk_b = torch.stack(msk_patches[b:end]) if mask is not None else None
+
+        tgt_m = tgt_b * (~msk_b).float() if msk_b is not None else tgt_b  # (M, P, P)
+
+        # Broadcast all K thresholds against all M patches simultaneously.
+        # binary_all: (K, M, P, P) bool — one tensor op replaces K Python iterations.
+        binary_all = src_b.unsqueeze(0) > thresholds.view(-1, 1, 1, 1)
+        binary_f = binary_all.float()
+        if msk_b is not None:
+            binary_f = binary_f * (~msk_b).unsqueeze(0).float()
+
+        tgt_e = tgt_m.unsqueeze(0)  # (1, M, P, P)
+        inter = (tgt_e * binary_f).sum(dim=(-2, -1))   # (K, M)
+        union = torch.maximum(binary_f, tgt_e).sum(dim=(-2, -1))  # (K, M)
+        iou = torch.where(union > 0, inter / union, torch.zeros_like(inter))  # (K, M)
+
+        best_k = iou.argmax(dim=0)        # (M,)
+        best_iou = iou.max(dim=0).values  # (M,)
+        best_thresh_vals = thresholds[best_k]  # (M,)
+
+        del binary_all, binary_f, inter, union, iou, tgt_e
+
+        # Two syncs per batch (.tolist()) rather than two per patch (.item() × M).
+        pa_list = best_iou.tolist()
+        thresh_list = best_thresh_vals.tolist()
+
+        for i, (top, bottom, left, right) in enumerate(coords[b:end]):
+            pa = pa_list[i]
+            if pa == 0:
+                continue
+            ph, pw = bottom - top, right - left
+            binary = (src_patches[b + i] > thresh_list[i]).float()
+            cumulative_detections[top:bottom, left:right] += binary[-ph:, -pw:] * pa
+            accuracy_tracker[top:bottom, left:right] += pa
 
     return cumulative_detections, accuracy_tracker
 
@@ -225,6 +281,7 @@ def multi_scale_optimisation(
                 min_thresh=min_thresh,
                 max_thresh=max_thresh,
             )
+
     normalised_accuracy = cumulative_detections / accuracy_tracker
 
     if torch.isnan(normalised_accuracy).any():
@@ -264,22 +321,20 @@ def get_NDWI(
     return ndwi
 
 
-def make_composite_output(input_dict: dict) -> tuple[np.ndarray, list[str]]:
+def make_composite_output(input_dict: dict) -> tuple[list[np.ndarray], list[str]]:
     output_layers = []
     layer_names = []
-    # Get the shape of the first non-None layer
+    shape = None
     for _key, value in input_dict.items():
         if value is not None:
             shape = value.shape
             break
     for key, value in input_dict.items():
-        #  if value is None, use a zero tensor to avoid missing layers
         if value is None:
             logging.info(f"Layer {key} is None, setting to zero tensor")
             value = torch.zeros(shape, dtype=torch.float32)
         output_layers.append(value.float().numpy(force=True).astype(np.float32))
         layer_names.append(key)
-    output_layers = np.stack(output_layers)
     return output_layers, layer_names
 
 
@@ -306,7 +361,7 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-) -> tuple[np.ndarray, list[str]]:
+) -> tuple[np.ndarray | list[np.ndarray], list[str], np.ndarray]:
     """Combine the NDWI, model predictions and vector targets"""
     if patch_sizes is None:
         patch_sizes = [200, 400, 800, 1000]
@@ -382,6 +437,7 @@ def integrate_water_detection_methods(
             patch_overlap=inference_overlap_size,
         )
         model_conf_tensor = torch.from_numpy(model_conf).to(mosaic_device)
+        del model_conf
 
         model_conf_tensor = model_conf_tensor.to(inference_dtype)
 
@@ -474,6 +530,8 @@ def integrate_water_detection_methods(
 
     combined_water = torch.stack(combined_water).sum(0) > 0
 
+    valid_mask = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
+
     if debug_output:
         logging.info("Exporting debug layers")
         final_output, layer_names = make_composite_output(
@@ -496,9 +554,7 @@ def integrate_water_detection_methods(
         )
     else:
         final_output = combined_water.numpy(force=True).astype(np.uint8)
-        no_data_mask_np = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
-        # final_output = np.expand_dims(final_output, axis=0)
-        final_output = np.stack([final_output, no_data_mask_np])
-        layer_names = ["Water predictions", "No data mask"]
+        final_output = np.expand_dims(final_output, axis=0)
+        layer_names = ["Water predictions"]
 
-    return final_output, layer_names
+    return final_output, layer_names, valid_mask
