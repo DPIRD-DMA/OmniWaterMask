@@ -72,7 +72,7 @@ scene_paths = [Path("path/to/scene1.tif"), Path("path/to/scene2.tif")]
 
 # Predict water masks for scenes
 water_mask_path = make_water_mask(
-    scene_paths=[scene_paths],  # you can pass a list of images
+    scene_paths=scene_paths,  # you can pass a list of images
     band_order=[1, 2, 3, 4],  # band order of the input images, expects RGB+NIR
 )
 ```
