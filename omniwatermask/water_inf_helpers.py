@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from queue import Queue
 from threading import Thread
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import cv2
 import numpy as np
@@ -59,7 +59,7 @@ def optimise_threshold(
 ) -> tuple[torch.Tensor, float]:
     """Get the optimal threshold to align the source tensor with the target tensor"""
 
-    def objective(threshold):
+    def objective(threshold: float) -> float:
         return -get_masked_iou(
             source=(source > threshold), target=target, mask=mask
         )  # Negative because we want to maximize
@@ -71,8 +71,8 @@ def optimise_threshold(
         options={"xatol": 0.0001, "maxiter": num_steps},
     )
 
-    optimal_threshold = result.x  # type: ignore
-    highest_accuracy = -result.fun  # type: ignore
+    optimal_threshold = result.x
+    highest_accuracy = -result.fun
 
     return source > optimal_threshold, float(highest_accuracy)
 
@@ -117,8 +117,8 @@ def optimise_by_threshold_and_overlap(
     source: torch.Tensor,
     target: torch.Tensor,
     mask: Optional[torch.Tensor],
-    scene_thresholds: tuple = (-0.3, 0.3),
-    cluster_thresholds: tuple = (0.4, 0.6),
+    scene_thresholds: tuple[float, float] = (-0.3, 0.3),
+    cluster_thresholds: tuple[float, float] = (0.4, 0.6),
     scene_threshold_steps: int = 20,
     cluster_ratio_steps: int = 15,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -172,6 +172,7 @@ def optimise_patches(
             full_size_left = right - patch_size
 
             target_patch = target[full_size_top:bottom, full_size_left:right]
+            mask_patch = None
             if mask is not None:
                 mask_patch = mask[full_size_top:bottom, full_size_left:right]
 
@@ -180,7 +181,7 @@ def optimise_patches(
                 binary_source_patch, patch_accuracy = optimise_threshold(
                     source=source_patch,
                     target=target_patch,
-                    mask=mask_patch if mask is not None else None,
+                    mask=mask_patch,
                     min_thresh=min_thresh,
                     max_thresh=max_thresh,
                 )
@@ -264,14 +265,19 @@ def get_NDWI(
     return ndwi
 
 
-def make_composite_output(input_dict: dict) -> tuple[np.ndarray, list[str]]:
+def make_composite_output(
+    input_dict: dict[str, Optional[torch.Tensor]],
+) -> tuple[np.ndarray, list[str]]:
     output_layers = []
     layer_names = []
     # Get the shape of the first non-None layer
-    for _key, value in input_dict.items():
+    shape = None
+    for value in input_dict.values():
         if value is not None:
             shape = value.shape
             break
+    if shape is None:
+        raise ValueError("make_composite_output requires at least one non-None layer")
     for key, value in input_dict.items():
         #  if value is None, use a zero tensor to avoid missing layers
         if value is None:
@@ -279,8 +285,7 @@ def make_composite_output(input_dict: dict) -> tuple[np.ndarray, list[str]]:
             value = torch.zeros(shape, dtype=torch.float32)
         output_layers.append(value.float().numpy(force=True).astype(np.float32))
         layer_names.append(key)
-    output_layers = np.stack(output_layers)
-    return output_layers, layer_names
+    return np.stack(output_layers), layer_names
 
 
 def integrate_water_detection_methods(
@@ -306,8 +311,14 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-) -> tuple[np.ndarray, list[str]]:
-    """Combine the NDWI, model predictions and vector targets"""
+) -> tuple[np.ndarray, list[str], Optional[np.ndarray]]:
+    """Combine the NDWI, model predictions and vector targets.
+
+    Returns the stacked output array, the per-band layer names, and an optional
+    validity mask (1 = valid, 0 = no data). The mask is ``None`` in debug mode
+    (where the no-data layer is kept as a regular band); otherwise it is written
+    as a GDAL dataset mask on export.
+    """
     if patch_sizes is None:
         patch_sizes = [200, 400, 800, 1000]
     if aux_vector_sources is None:
@@ -331,7 +342,7 @@ def integrate_water_detection_methods(
     ndwi_conf_tensor = ndwi_conf_tensor.to(inference_dtype)
 
     logging.info("Building vector target in thread")
-    vector_target_result_queue = Queue()
+    vector_target_result_queue: Queue[Any] = Queue()
     vector_target_thread = Thread(
         target=build_targets,
         kwargs={
@@ -341,11 +352,16 @@ def integrate_water_detection_methods(
             "device": mosaic_device,
             "cache_dir": cache_dir,
             "use_cache": use_cache,
+            # For now positive targets use all_touched=True (same as negative);
+            # set to False to only flip pixels a feature mostly covers.
+            "all_touched": True,
             "queue": vector_target_result_queue,
         },
     )
     vector_target_thread.start()
 
+    negative_target_thread: Optional[Thread] = None
+    negative_target_result_queue: Optional[Queue[Any]] = None
     if use_osm_building_mask or use_osm_roads_mask:
         logging.info("Building negative targets in thread")
         negative_target_result_queue = Queue()
@@ -359,6 +375,7 @@ def integrate_water_detection_methods(
                 "device": mosaic_device,
                 "cache_dir": cache_dir,
                 "use_cache": use_cache,
+                "all_touched": True,
                 "queue": negative_target_result_queue,
             },
         )
@@ -403,7 +420,7 @@ def integrate_water_detection_methods(
         model_target.append(vector_targets)
         ndwi_target.append(vector_targets)
 
-    if use_osm_building_mask or use_osm_roads_mask:
+    if negative_target_thread is not None and negative_target_result_queue is not None:
         if negative_target_thread.is_alive():
             logging.info("Waiting for negative targets to finish")
         negative_target_thread.join()
@@ -412,16 +429,19 @@ def integrate_water_detection_methods(
             negative_target.append(vector_negative_target)
 
     if len(negative_target) > 0:
-        negative_target = torch.stack(negative_target).sum(0) > 0
+        negative_target_tensor: Optional[torch.Tensor] = (
+            torch.stack(negative_target).sum(0) > 0
+        )
     else:
-        negative_target = None
+        negative_target_tensor = None
 
+    ndwi_target_tensor: Optional[torch.Tensor]
     if use_ndwi:
         logging.info("Optimising NDWI")
         if len(ndwi_target) > 0:
-            ndwi_target = torch.stack(ndwi_target).sum(0)
+            ndwi_target_tensor = torch.stack(ndwi_target).sum(0)
         else:
-            ndwi_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
+            ndwi_target_tensor = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
         (
             NDWI_binary,
@@ -431,9 +451,9 @@ def integrate_water_detection_methods(
             normalised_accuracy,
         ) = multi_scale_optimisation(
             source=ndwi_conf_tensor,
-            target=ndwi_target,
+            target=ndwi_target_tensor,
             patch_sizes=patch_sizes,
-            mask=negative_target,
+            mask=negative_target_tensor,
         )
         logging.info("Multi-scale optimisation accuracy finished")
         combined_water.append(NDWI_binary)
@@ -442,29 +462,30 @@ def integrate_water_detection_methods(
 
     else:
         NDWI_binary = None
-        ndwi_target = None
+        ndwi_target_tensor = None
         NDWI_accuracy_tracker = None
         NDWI_cumulative_detections = None
         normalised_accuracy = None
 
     if len(model_target) > 0:
-        model_target = torch.stack(model_target).sum(0)
+        model_target_tensor = torch.stack(model_target).sum(0)
     else:
-        model_target = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
+        model_target_tensor = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
     if model_conf_tensor is not None:
         if optimise_model:
             logging.info("Optimising model predictions")
             model_binary_cleaned, _ = optimise_by_threshold_and_overlap(
                 source=model_conf_tensor,
-                target=model_target,
-                mask=negative_target,
+                target=model_target_tensor,
+                mask=negative_target_tensor,
                 scene_thresholds=(0, 1),
             )
 
             combined_water.append(model_binary_cleaned)
         else:
             logging.info("Using raw model predictions")
+            assert model_binary is not None
             combined_water.append(model_binary)
             model_binary_cleaned = None
 
@@ -472,33 +493,36 @@ def integrate_water_detection_methods(
         model_conf_tensor = None
         model_binary_cleaned = None
 
-    combined_water = torch.stack(combined_water).sum(0) > 0
+    combined_water_tensor = torch.stack(combined_water).sum(0) > 0
 
     if debug_output:
         logging.info("Exporting debug layers")
         final_output, layer_names = make_composite_output(
             {
-                "Water predictions": combined_water,
+                "Water predictions": combined_water_tensor,
                 "NDWI binary": NDWI_binary,
-                "NDWI target": ndwi_target,
+                "NDWI target": ndwi_target_tensor,
                 "NDWI raw": ndwi_conf_tensor,
                 "NDWI cumulative detections": NDWI_cumulative_detections,
                 "NDWI accuracy tracker": NDWI_accuracy_tracker,
                 "NDWI normalised accuracy": normalised_accuracy,
                 "Model binary cleaned": model_binary_cleaned,
                 "Model binary": model_binary,
-                "Model target": model_target,
+                "Model target": model_target_tensor,
                 "Model confidence": model_conf_tensor,
                 "Vector inputs": vector_targets,
-                "Negative vector inputs": negative_target,
+                "Negative vector inputs": negative_target_tensor,
                 "No data mask": no_data_mask,
             }
         )
+        nodata_mask_np = None
     else:
-        final_output = combined_water.numpy(force=True).astype(np.uint8)
-        no_data_mask_np = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
-        # final_output = np.expand_dims(final_output, axis=0)
-        final_output = np.stack([final_output, no_data_mask_np])
-        layer_names = ["Water predictions", "No data mask"]
+        final_output = combined_water_tensor.numpy(force=True).astype(np.uint8)
+        final_output = np.expand_dims(final_output, axis=0)
+        layer_names = ["Water predictions"]
+        # validity mask: 1 where data is valid, 0 where no data. Written as a
+        # GDAL dataset mask on export so QGIS treats nodata as transparent
+        # rather than as a second grey data band.
+        nodata_mask_np = (~(no_data_mask.bool())).numpy(force=True).astype(np.uint8)
 
-    return final_output, layer_names
+    return final_output, layer_names, nodata_mask_np

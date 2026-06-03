@@ -60,23 +60,17 @@ class TestCheckDb:
         initialize_db(cache_dir)
         polygon = box(0, 0, 1, 1)
         paths = []
-        test_gdf = gpd.GeoDataFrame(
-            geometry=[Point(0.5, 0.5)], crs="EPSG:4326"
-        )
+        test_gdf = gpd.GeoDataFrame(geometry=[Point(0.5, 0.5)], crs="EPSG:4326")
         add_to_db(cache_dir, polygon, paths, test_gdf, water=True)
 
-        result_gdf, found = check_db(
-            cache_dir, polygon, paths, water=True
-        )
+        result_gdf, found = check_db(cache_dir, polygon, paths, water=True)
         assert found is True
         assert len(result_gdf) == 1
 
     def test_different_flags_no_match(self, cache_dir):
         initialize_db(cache_dir)
         polygon = box(0, 0, 1, 1)
-        test_gdf = gpd.GeoDataFrame(
-            geometry=[Point(0.5, 0.5)], crs="EPSG:4326"
-        )
+        test_gdf = gpd.GeoDataFrame(geometry=[Point(0.5, 0.5)], crs="EPSG:4326")
         add_to_db(cache_dir, polygon, [], test_gdf, water=True)
 
         # Search with roads=True instead — should not match
@@ -88,9 +82,7 @@ class TestAddToDb:
     def test_adds_entry_and_saves_parquet(self, cache_dir):
         initialize_db(cache_dir)
         polygon = box(10, 20, 30, 40)
-        gdf = gpd.GeoDataFrame(
-            geometry=[box(11, 21, 29, 39)], crs="EPSG:4326"
-        )
+        gdf = gpd.GeoDataFrame(geometry=[box(11, 21, 29, 39)], crs="EPSG:4326")
         add_to_db(cache_dir, polygon, [], gdf, water=True, roads=False, buildings=False)
 
         # Verify DB row exists
@@ -107,9 +99,7 @@ class TestAddToDb:
         initialize_db(cache_dir)
         for i in range(3):
             polygon = box(i, i, i + 1, i + 1)
-            gdf = gpd.GeoDataFrame(
-                geometry=[Point(i + 0.5, i + 0.5)], crs="EPSG:4326"
-            )
+            gdf = gpd.GeoDataFrame(geometry=[Point(i + 0.5, i + 0.5)], crs="EPSG:4326")
             add_to_db(cache_dir, polygon, [], gdf, water=True)
 
         with sqlite3.connect(cache_dir / DB_NAME) as conn:

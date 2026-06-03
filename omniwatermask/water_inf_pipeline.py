@@ -12,7 +12,11 @@ from omnicloudmask.model_utils import (
 )
 from tqdm.auto import tqdm
 
-from .__version__ import __version__
+try:
+    from ._version import __version__
+except ImportError:
+    __version__ = "0.0.0+unknown"
+
 from .download_models import get_models
 from .raster_helpers import export_to_disk, resample_input
 from .vector_cache import initialize_db
@@ -28,10 +32,11 @@ def collect_models(
 ) -> list[torch.nn.Module]:
     models = []
     if model_path != "":
+        model_path_list: list[str | Path]
         if not isinstance(model_path, list):
             model_path_list = [model_path]
         else:
-            model_path_list = model_path
+            model_path_list = list(model_path)
 
         for model_p in model_path_list:
             model = load_model(
@@ -233,7 +238,7 @@ def make_water_mask_debug(
         input_bands = input_src.read(band_order)
 
         logging.info(f"Predicting water mask for {input_image.name}")
-        water_predictions, layer_names = integrate_water_detection_methods(
+        water_predictions, layer_names, nodata_mask = integrate_water_detection_methods(
             input_bands=input_bands,
             input_path=input_image,
             debug_output=debug_output,
@@ -262,6 +267,7 @@ def make_water_mask_debug(
             export_path=export_path,
             source_path=input_image,
             layer_names=layer_names,
+            nodata_mask=nodata_mask,
         )
         p_bar.update(1)
     p_bar.refresh()

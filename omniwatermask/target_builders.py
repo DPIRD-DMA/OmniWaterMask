@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from queue import Queue
-from typing import Union
+from typing import Any, Union
 
 import geopandas as gpd
 import osmnx as ox
@@ -21,13 +21,18 @@ REQUIRED_VERSION = "2.0.0"
 
 def get_osm_features(
     gdf_bounds_4326: gpd.GeoDataFrame,
-    tags: dict,
+    tags: dict[str, Any],
 ) -> gpd.GeoDataFrame:
     """Download OpenStreetMap features data within a bounding box"""
     gpd_bbox = gdf_bounds_4326.total_bounds
     try:
         features = ox.features_from_bbox(
-            bbox=tuple(gpd_bbox),  # type: ignore
+            bbox=(
+                float(gpd_bbox[0]),
+                float(gpd_bbox[1]),
+                float(gpd_bbox[2]),
+                float(gpd_bbox[3]),
+            ),
             tags=tags,
         )
     except InsufficientResponseError:
@@ -46,12 +51,12 @@ def get_wgs84_bounds_gdf_from_raster(
     """Get the bounds of a raster in WGS84"""
     bounds = src.bounds
     bbox_poly = box(bounds.left, bounds.bottom, bounds.right, bounds.top)
-    gdf_bounds = gpd.GeoDataFrame(geometry=[bbox_poly], crs=src.crs)  # type: ignore
+    gdf_bounds = gpd.GeoDataFrame(geometry=[bbox_poly], crs=src.crs)
     gdf_bounds_4326 = gdf_bounds.to_crs(CRS.from_epsg(4326))
-    return gdf_bounds_4326  # type: ignore
+    return gdf_bounds_4326
 
 
-def get_aux_data(bbox: gpd.GeoDataFrame, vector_path: Path):
+def get_aux_data(bbox: gpd.GeoDataFrame, vector_path: Path) -> gpd.GeoDataFrame:
     gdf = gpd.read_file(vector_path, bbox=bbox)
     gdf = gdf.to_crs("EPSG:4326")
     return gdf
@@ -81,18 +86,18 @@ def combine_vector_targets(
 
     all_targets.loc[line_mask, "geometry"] = all_targets.loc[
         line_mask, "geometry"
-    ].buffer(distance=5, resolution=8)  # type: ignore
+    ].buffer(distance=5, resolution=8)
 
-    all_targets["geometry"] = all_targets["geometry"].make_valid()
+    all_targets["geometry"] = all_targets.geometry.make_valid()
 
     all_targets = gpd.GeoDataFrame(all_targets).to_crs(raster_src.crs)
 
     return gpd.GeoDataFrame(all_targets)
 
 
-OSM_buildings_tags = {"building": True}
-OSM_roads_tags = {"highway": True}
-OSM_water_tags = {
+OSM_buildings_tags: dict[str, Any] = {"building": True}
+OSM_roads_tags: dict[str, Any] = {"highway": True}
+OSM_water_tags: dict[str, Any] = {
     "natural": [
         "water",
         "strait",
@@ -113,9 +118,18 @@ def build_targets(
     osm_roads: bool = False,
     osm_buildings: bool = False,
     use_cache: bool = True,
-    queue: Queue | None = None,
-) -> torch.Tensor | None | Queue:
-    """Combine vector for targets into a raster."""
+    all_touched: bool = False,
+    queue: Queue[Any] | None = None,
+) -> torch.Tensor | None | Queue[Any]:
+    """Combine vector for targets into a raster.
+
+    ``all_touched`` controls the rasterization rule. ``False`` (centre-based)
+    only flips a pixel when a feature covers roughly the majority of it, which
+    suits positive water targets where small sub-pixel features should not turn
+    a whole pixel on. ``True`` flips a pixel if any feature touches it at all,
+    which suits negative targets (buildings/roads) where we want to aggressively
+    exclude anything those features clip.
+    """
     try:
         if (
             not osm_water
@@ -139,9 +153,11 @@ def build_targets(
 
         gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
 
+        bounds = gdf_bounds_4326.geometry.total_bounds
+        polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
+
+        combined_vectors = None
         if use_cache:
-            bounds = gdf_bounds_4326.geometry.total_bounds
-            polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
             combined_vectors, cache_found = check_db(
                 cache_dir=cache_dir,
                 polygon=polygon,
@@ -198,7 +214,9 @@ def build_targets(
             return None
 
         rasterized_targets = rasterize_vector(
-            gdf=combined_vectors, reference_profile=raster_src.profile
+            gdf=combined_vectors,
+            reference_profile=raster_src.profile,
+            all_touched=all_touched,
         )
 
         result = torch.from_numpy(rasterized_targets).to(torch.bool).to(device)

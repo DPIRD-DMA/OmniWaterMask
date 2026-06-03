@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0] - Jun 3, 2026
+
+### Changed
+- **Breaking:** No-data is now written as a GDAL dataset mask via `dst.write_mask()` instead of as a second data band, so GIS software (e.g. QGIS) treats no-data pixels as transparent. The mask is embedded inside the GeoTIFF (`GDAL_TIFF_INTERNAL_MASK`) rather than written as a `.tif.msk` sidecar. Standard output GeoTIFFs now have a single `Water predictions` band; read the mask with `src.read_masks(1)`. Debug output is unchanged.
+- Versioning now derives from git tags via `setuptools-scm` (generates `omniwatermask/_version.py` at build time); the hardcoded `omniwatermask/__version__.py` was removed.
+- End-to-end tests are now excluded from the default test run (`addopts = "-m 'not e2e'"`); run them explicitly with `pytest -m e2e`.
+
+### Added
+- `py.typed` marker and full type hints — the package now ships type information (PEP 561) and is checked with `mypy --strict`.
+- Pre-commit hooks (ruff lint/format, mypy, fast tests) and GitHub Actions CI.
+- PyPI trove classifiers and project URLs (Repository, Issues, Changelog) in `pyproject.toml`.
+- Cloudy Sentinel-2 example notebook demonstrating cloud masking with OmniCloudMask before inference, plus a "Cloudy imagery" guidance section in the README.
+
 ## [0.4.3] - Mar 5, 2026
 
 ### Fixed

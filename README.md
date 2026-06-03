@@ -1,14 +1,17 @@
-# OmniWaterMask
+<div align="center">
+
+<img src="https://raw.githubusercontent.com/DPIRD-DMA/OmniWaterMask/main/assets/omniwatermask-title.svg" alt="OmniWaterMask" width="680">
 
 [![image](https://img.shields.io/pypi/v/omniwatermask.svg)](https://pypi.python.org/pypi/omniwatermask)
 [![image](https://static.pepy.tech/badge/omniwatermask)](https://pepy.tech/project/omniwatermask)
 [![image](https://img.shields.io/conda/vn/conda-forge/omniwatermask.svg)](https://anaconda.org/conda-forge/omniwatermask)
-[![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/omniwatermask.svg)](https://anaconda.org/conda-forge/omniwatermask)
 [![Conda Recipe](https://img.shields.io/badge/recipe-omniwatermask-green.svg)](https://github.com/conda-forge/omniwatermask-feedstock)
+
+</div>
 
 OmniWaterMask is a Python library for high accuracy water segmentation in high to moderate resolution satellite imagery, supporting a wide range of resolutions, sensors, and processing levels.
 
-[The OmniWaterMask paper is now published 🎉](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
+[Check out the paper here](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
 
 
 ## Features
@@ -95,6 +98,17 @@ water_mask_path = make_water_mask(
 
 -   When working with scenes containing no-data regions, explicitly set the 'no_data_value' parameter to ensure proper handling of these areas.
 
+### Cloudy imagery
+
+If you are working with cloudy imagery, either:
+
+-   use a **temporal mosaic** that is already cloud and cloud-shadow free (e.g. via [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic) for Sentinel-2), or
+-   apply a **high quality cloud and cloud shadow mask** and set those pixels to `0` (the `no_data_value`) before running OWM.
+
+This matters because OWM optimises its detection thresholds both **locally** (per region/patch) and **globally** (across the whole scene). Cloud and cloud-shadow pixels are out-of-distribution and can skew those optimisations, so bad data in one part of a scene can degrade the water prediction in other, otherwise-clean parts. Masking those pixels to no-data removes them from the optimisation entirely.
+
+[OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) is a good choice for the masking step. See the [cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel-2%20example.ipynb) for an end-to-end mask-then-infer workflow.
+
 
 ## Parameters
 
@@ -145,6 +159,7 @@ Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/
 
 -   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb) — Water segmentation on NAIP aerial imagery from HuggingFace
 -   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb) — Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
+-   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel-2%20example.ipynb) — Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
 
 ## Changelog
 
@@ -153,6 +168,48 @@ See [CHANGELOG.md](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/CHANGELO
 ## Contributing
 
 Contributions are welcome! Please submit a pull request or open an issue to discuss any changes.
+
+### Development setup
+
+Clone the repository and install the dependencies (including the dev group) with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync --all-extras --dev
+```
+
+Optionally install the git hooks (ruff lint/format on commit, mypy + the fast tests on push):
+
+```bash
+uv run pre-commit install
+uv run pre-commit install --hook-type pre-push
+```
+
+### Running the tests
+
+Tests use `pytest`. The fast suite (unit tests + model-mocked pipeline tests) runs in a few seconds and is what CI runs by default:
+
+```bash
+uv run pytest                              # full fast suite
+uv run pytest tests/test_orchestration.py  # one file
+uv run pytest -k make_water_mask           # match by name
+```
+
+End-to-end tests that download the real model weights and run inference on real imagery are marked `e2e` and excluded by default (see `addopts` in `pyproject.toml`). To run them explicitly:
+
+```bash
+uv run pytest -m e2e                        # only the e2e/inference tests
+uv run pytest -m ""                         # everything, including e2e
+```
+
+Lint, format and type-check:
+
+```bash
+uv run ruff check .
+uv run ruff format .
+uv run mypy omniwatermask/
+```
+
+For maintainers: pushing a version tag (e.g. `git tag v0.4.4 && git push --tags`) builds the package and publishes it to PyPI via GitHub Actions trusted publishing — no tokens required.
 
 ## License
 

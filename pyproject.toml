@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools >= 61.0"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -27,16 +27,34 @@ dependencies = [
     "fastai>=2.7",
 ]
 license = "MIT"
+license-files = ["LICENSE"]
 readme = {file = "README.md", content-type = "text/markdown"}
 keywords = ["sentinel-2", "landsat", "maxar", "planetscope", "satellite", "water", "remote-sensing", "mask"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
 
-[tool.setuptools.dynamic]
-version = {attr = "omniwatermask.__version__.__version__"}
+[tool.setuptools_scm]
+version_file = "omniwatermask/_version.py"
 
 [dependency-groups]
 dev = [
     "folium>=0.20.0",
     "jupyter>=1.1.1",
+    "mypy>=1.19",
+    "nbmake>=1.5.5",
+    "pre-commit>=4.0",
     "pytest>=9.0.2",
     "ruff>=0.12.2",
     "s2mosaic>=0.3.2",
@@ -44,21 +62,37 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/DPIRD-DMA/OmniWaterMask"
-
-[tool.setuptools.package-data]
-omniwatermask = ["model_download_links.csv"]
+Repository = "https://github.com/DPIRD-DMA/OmniWaterMask"
+Issues = "https://github.com/DPIRD-DMA/OmniWaterMask/issues"
+Changelog = "https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["omniwatermask"]
+
+[tool.setuptools.package-data]
+omniwatermask = ["model_download_links.csv", "py.typed"]
+
+[tool.mypy]
+files = ["omniwatermask"]
+ignore_missing_imports = true
+strict = true
+
+[tool.ruff]
+extend-exclude = ["omniwatermask/_version.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]
+"*.ipynb" = ["E402", "E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "e2e: end-to-end tests (require model downloads and real data processing)",
 ]
+addopts = "-m 'not e2e'"
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]
-
-[tool.ruff.lint]
-select = ["E", "F", "B"]

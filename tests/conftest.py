@@ -1,4 +1,3 @@
-
 import geopandas as gpd
 import numpy as np
 import pytest
@@ -29,16 +28,16 @@ def sample_geotiff(tmp_path):
 
     bands = np.zeros((4, height, width), dtype=np.uint16)
     # Land signature: higher NIR than green
-    bands[0, :, :] = 500   # Blue
-    bands[1, :, :] = 600   # Green
-    bands[2, :, :] = 700   # Red
+    bands[0, :, :] = 500  # Blue
+    bands[1, :, :] = 600  # Green
+    bands[2, :, :] = 700  # Red
     bands[3, :, :] = 1200  # NIR
 
     # Water signature in centre 40x40: higher green than NIR
-    bands[0, 30:70, 30:70] = 300   # Blue
-    bands[1, 30:70, 30:70] = 400   # Green
-    bands[2, 30:70, 30:70] = 200   # Red
-    bands[3, 30:70, 30:70] = 100   # NIR
+    bands[0, 30:70, 30:70] = 300  # Blue
+    bands[1, 30:70, 30:70] = 400  # Green
+    bands[2, 30:70, 30:70] = 200  # Red
+    bands[3, 30:70, 30:70] = 100  # NIR
 
     profile = {
         "driver": "GTiff",

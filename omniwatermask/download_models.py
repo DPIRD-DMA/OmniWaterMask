@@ -1,6 +1,6 @@
 from importlib import resources
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 import gdown
 import pandas as pd
@@ -9,7 +9,10 @@ import torch
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 
-from .__version__ import __version__ as omniwatermask_version
+try:
+    from ._version import __version__ as omniwatermask_version
+except ImportError:
+    omniwatermask_version = "0.0.0+unknown"
 
 
 def download_file_from_google_drive(file_id: str, destination: Path) -> None:
@@ -72,7 +75,7 @@ def get_models(
     model_dir: Union[str, Path, None] = None,
     source: str = "hugging_face",
     model_version: float = 1.0,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Downloads the model weights and saves them locally.
 

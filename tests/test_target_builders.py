@@ -24,8 +24,8 @@ class TestGetWgs84BoundsGdfFromRaster:
         # Should produce valid WGS84 coordinates
         assert -180 <= bounds[0] <= 180  # min lon
         assert -180 <= bounds[2] <= 180  # max lon
-        assert -90 <= bounds[1] <= 90   # min lat
-        assert -90 <= bounds[3] <= 90   # max lat
+        assert -90 <= bounds[1] <= 90  # min lat
+        assert -90 <= bounds[3] <= 90  # max lat
 
     def test_single_geometry(self, sample_rasterio_src):
         result = get_wgs84_bounds_gdf_from_raster(sample_rasterio_src)
@@ -135,9 +135,7 @@ class TestBuildTargets:
         assert q.get() is None
 
     @patch("omniwatermask.target_builders.get_osm_features")
-    def test_builds_osm_water_targets(
-        self, mock_osm, sample_rasterio_src, cache_dir
-    ):
+    def test_builds_osm_water_targets(self, mock_osm, sample_rasterio_src, cache_dir):
         from omniwatermask.vector_cache import initialize_db
 
         initialize_db(cache_dir)

@@ -45,8 +45,7 @@ class TestGetModels:
         model_dir = tmp_path / "models"
         model_dir.mkdir()
         model_name = (
-            "PM_model_1.5.38_s1s2_water_flair_"
-            "convnextv2_base_PT.pth_weights.pth"
+            "PM_model_1.5.38_s1s2_water_flair_convnextv2_base_PT.pth_weights.pth"
         )
         fake_model = model_dir / model_name
         fake_model.write_bytes(b"x" * (2 * 1024 * 1024))  # 2MB
@@ -64,9 +63,7 @@ class TestGetModels:
     def test_force_download(self, mock_download, tmp_path):
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        get_models(
-            force_download=True, model_dir=model_dir, source="hugging_face"
-        )
+        get_models(force_download=True, model_dir=model_dir, source="hugging_face")
         assert mock_download.called
 
     def test_invalid_version_raises(self, tmp_path):
@@ -79,8 +76,7 @@ class TestGetModels:
         model_dir = tmp_path / "models"
         model_dir.mkdir()
         model_name = (
-            "PM_model_1.5.38_s1s2_water_flair_"
-            "convnextv2_base_PT.pth_weights.pth"
+            "PM_model_1.5.38_s1s2_water_flair_convnextv2_base_PT.pth_weights.pth"
         )
         fake_model = model_dir / model_name
         fake_model.write_bytes(b"x" * 100)  # tiny file

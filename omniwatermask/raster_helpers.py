@@ -1,10 +1,11 @@
 from pathlib import Path
-from typing import Union
+from typing import Any, Optional, Union
 
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
 from rasterio import features
+from rasterio.transform import from_bounds
 
 
 def resample_input(
@@ -19,11 +20,12 @@ def resample_input(
         new_height = round(src.height * scale_factor)
         new_width = round(src.width * scale_factor)
 
+        left, bottom, right, top = src.bounds
         profile = src.profile.copy()
         profile.update(
             height=new_height,
             width=new_width,
-            transform=rio.transform.from_bounds(*src.bounds, new_width, new_height),  # type: ignore
+            transform=from_bounds(left, bottom, right, top, new_width, new_height),
             alpha="unspecified",
         )
         data = src.read(out_shape=(src.count, new_height, new_width))
@@ -37,9 +39,20 @@ def resample_input(
 
 
 def export_to_disk(
-    array: np.ndarray, export_path: Path, source_path: Path, layer_names: list[str]
-):
-    """Export the array to disk as a GeoTIFF"""
+    array: np.ndarray,
+    export_path: Path,
+    source_path: Path,
+    layer_names: list[str],
+    nodata_mask: Optional[np.ndarray] = None,
+) -> None:
+    """Export the array to disk as a GeoTIFF.
+
+    If ``nodata_mask`` is provided (1 = valid, 0 = no data) it is written as a
+    GDAL dataset mask via ``dst.write_mask`` rather than as a regular band, so
+    GIS software (e.g. QGIS) treats no-data pixels as transparent. The mask is
+    embedded inside the GeoTIFF (``GDAL_TIFF_INTERNAL_MASK``) rather than written
+    as a separate ``.tif.msk`` sidecar, so it travels with the file.
+    """
     src = rio.open(source_path)
     profile = {
         "dtype": array.dtype,
@@ -53,15 +66,25 @@ def export_to_disk(
         "crs": src.crs,
     }
 
-    with rio.open(export_path, "w", **profile) as dst:
-        dst.write(array)
-        dst.descriptions = layer_names
+    with rio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rio.open(export_path, "w", **profile) as dst:
+            dst.write(array)
+            dst.descriptions = layer_names
+            if nodata_mask is not None:
+                dst.write_mask((nodata_mask * 255).astype("uint8"))
 
 
 def rasterize_vector(
-    gdf: gpd.GeoDataFrame, reference_profile: dict, all_touched=True
+    gdf: gpd.GeoDataFrame, reference_profile: dict[str, Any], all_touched: bool = False
 ) -> np.ndarray:
-    """Rasterize a GeoDataFrame into a binary array using the reference rio profile."""
+    """Rasterize a GeoDataFrame into a binary array using the reference rio profile.
+
+    With ``all_touched=False`` (the default) a pixel is only set when its centre
+    falls inside a geometry, so a feature must cover roughly the majority of a
+    pixel for it to flip on. This avoids small sub-pixel features (e.g. a tiny
+    pond inside a single 10 m Sentinel-2 pixel) turning on the whole pixel, which
+    is what ``all_touched=True`` would do for any feature that merely clips it.
+    """
     height, width = reference_profile["height"], reference_profile["width"]
     pixel_size = reference_profile["transform"][0]
     out = np.zeros((height, width), dtype=rio.uint8)

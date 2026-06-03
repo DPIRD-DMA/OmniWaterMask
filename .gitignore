@@ -1,4 +1,10 @@
 cache/*.json
+# coverage.py artifacts
+.coverage
+.coverage.*
+htmlcov/
+# setuptools-scm generated version file
+omniwatermask/_version.py
 omniwatermask/__pycache__/*
 omniwatermask/models/*.pth
 water_vectors_cache/*
@@ -16,3 +22,8 @@ examples/data/naip_water_test.tif
 examples/OWM_cache/*
 examples/cache/*
 examples/data/*
+data/S2B_MSIL2A_20241219T013659_R031_T52LEH_20241219T030742_TL_RGBNIR.tif
+OWM_cache/*
+data/S2A_56HLH_20231011_0_L2A_RGBNIR.tif
+examples/water_vectors_cache/gdfs/*.parquet
+examples/water_vectors_cache/*.db

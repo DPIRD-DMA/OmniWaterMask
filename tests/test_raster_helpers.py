@@ -63,6 +63,27 @@ class TestExportToDisk:
             assert src.width == 100
             assert src.descriptions == ("layer1", "layer2")
 
+    def test_nodata_mask_written_as_gdal_mask(self, sample_geotiff, tmp_dir):
+        array = np.ones((1, 100, 100), dtype=np.uint8)
+        nodata_mask = np.ones((100, 100), dtype=np.uint8)
+        nodata_mask[:10, :10] = 0  # a no-data corner
+        export_path = tmp_dir / "masked.tif"
+        export_to_disk(
+            array=array,
+            export_path=export_path,
+            source_path=sample_geotiff,
+            layer_names=["Water predictions"],
+            nodata_mask=nodata_mask,
+        )
+        # mask is embedded in the GeoTIFF, not a sidecar file
+        assert not (tmp_dir / "masked.tif.msk").exists()
+        with rio.open(export_path) as src:
+            # mask is a dataset mask, not an extra data band
+            assert src.count == 1
+            mask = src.read_masks(1)
+            assert mask[0, 0] == 0  # no-data corner
+            assert mask[50, 50] == 255  # valid
+
     def test_preserves_crs_and_transform(self, sample_geotiff, tmp_dir):
         array = np.ones((1, 100, 100), dtype=np.float32)
         export_path = tmp_dir / "output.tif"
