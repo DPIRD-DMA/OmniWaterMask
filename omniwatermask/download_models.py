@@ -14,6 +14,8 @@ try:
 except ImportError:
     omniwatermask_version = "0.0.0+unknown"
 
+gdown_download: Any = getattr(gdown, "download")  # noqa: B009
+
 
 def download_file_from_google_drive(file_id: str, destination: Path) -> None:
     """
@@ -24,7 +26,7 @@ def download_file_from_google_drive(file_id: str, destination: Path) -> None:
         destination (Path): The local path where the file should be saved.
     """
     url = f"https://drive.google.com/uc?id={file_id}"
-    gdown.download(url, str(destination), quiet=False)
+    gdown_download(url, str(destination), quiet=False)
 
 
 def download_file_from_hugging_face(destination: Path) -> None:
@@ -60,11 +62,25 @@ def download_file(file_id: str, destination: Path, source: str) -> None:
         )
 
 
+def _release_version(version: str) -> str:
+    """Return only the public release portion of a version string.
+
+    Tag-based versioning produces dev/dirty suffixes between releases
+    (e.g. "0.5.1.dev3+g1a2b3c4"). Keying the model cache on the full
+    string would create a new empty directory for every commit and force
+    a re-download. Stripping the ".dev*"/"+local" suffix keeps the cache
+    stable between releases while still refreshing on real version bumps.
+    """
+    return version.split("+")[0].split(".dev")[0]
+
+
 def get_model_data_dir() -> Path:
     """Get the user data directory for model files"""
     data_dir = Path(
         platformdirs.user_data_dir(
-            "omniwatermask", version=omniwatermask_version, ensure_exists=True
+            "omniwatermask",
+            version=_release_version(omniwatermask_version),
+            ensure_exists=True,
         )
     )
     return data_dir

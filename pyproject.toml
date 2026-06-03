@@ -25,6 +25,9 @@ dependencies = [
     "tqdm>=4.0",
     "platformdirs>=4.0.0",
     "fastai>=2.7",
+    # spaCy 3.8.14 advertises Python 3.14 support but does not publish an
+    # installable cp314 artifact for the GitHub Actions Linux runner.
+    "spacy!=3.8.14",
 ]
 license = "MIT"
 license-files = ["LICENSE"]

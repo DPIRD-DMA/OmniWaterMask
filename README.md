@@ -107,7 +107,7 @@ If you are working with cloudy imagery, either:
 
 This matters because OWM optimises its detection thresholds both **locally** (per region/patch) and **globally** (across the whole scene). Cloud and cloud-shadow pixels are out-of-distribution and can skew those optimisations, so bad data in one part of a scene can degrade the water prediction in other, otherwise-clean parts. Masking those pixels to no-data removes them from the optimisation entirely.
 
-[OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) is a good choice for the masking step. See the [cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel-2%20example.ipynb) for an end-to-end mask-then-infer workflow.
+[OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) is a good choice for the masking step. See the [cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb) for an end-to-end mask-then-infer workflow.
 
 
 ## Parameters
@@ -159,7 +159,7 @@ Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/
 
 -   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb) — Water segmentation on NAIP aerial imagery from HuggingFace
 -   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb) — Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
--   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel-2%20example.ipynb) — Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
+-   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb) — Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
 
 ## Changelog
 

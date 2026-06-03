@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import rasterio as rio
 import torch
+from numpy.typing import NDArray
 from omnicloudmask import predict_from_array
 from scipy.optimize import minimize_scalar
 
@@ -253,7 +254,7 @@ def multi_scale_optimisation(
 
 
 def get_NDWI(
-    input_bands: np.ndarray, mosaic_device: Union[str, torch.device]
+    input_bands: NDArray[Any], mosaic_device: Union[str, torch.device]
 ) -> torch.Tensor:
     input_bands_tensor = torch.from_numpy(input_bands.astype(np.float16)).to(
         mosaic_device
@@ -267,7 +268,7 @@ def get_NDWI(
 
 def make_composite_output(
     input_dict: dict[str, Optional[torch.Tensor]],
-) -> tuple[np.ndarray, list[str]]:
+) -> tuple[NDArray[Any], list[str]]:
     output_layers = []
     layer_names = []
     # Get the shape of the first non-None layer
@@ -289,7 +290,7 @@ def make_composite_output(
 
 
 def integrate_water_detection_methods(
-    input_bands: np.ndarray,
+    input_bands: NDArray[Any],
     input_path: Path,
     cache_dir: Path,
     inference_dtype: torch.dtype,
@@ -311,7 +312,7 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-) -> tuple[np.ndarray, list[str], Optional[np.ndarray]]:
+) -> tuple[NDArray[Any], list[str], Optional[NDArray[Any]]]:
     """Combine the NDWI, model predictions and vector targets.
 
     Returns the stacked output array, the per-band layer names, and an optional

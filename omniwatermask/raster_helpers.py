@@ -4,6 +4,7 @@ from typing import Any, Optional, Union
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
+from numpy.typing import NDArray
 from rasterio import features
 from rasterio.transform import from_bounds
 
@@ -39,11 +40,11 @@ def resample_input(
 
 
 def export_to_disk(
-    array: np.ndarray,
+    array: NDArray[Any],
     export_path: Path,
     source_path: Path,
     layer_names: list[str],
-    nodata_mask: Optional[np.ndarray] = None,
+    nodata_mask: Optional[NDArray[Any]] = None,
 ) -> None:
     """Export the array to disk as a GeoTIFF.
 
@@ -76,7 +77,7 @@ def export_to_disk(
 
 def rasterize_vector(
     gdf: gpd.GeoDataFrame, reference_profile: dict[str, Any], all_touched: bool = False
-) -> np.ndarray:
+) -> NDArray[Any]:
     """Rasterize a GeoDataFrame into a binary array using the reference rio profile.
 
     With ``all_touched=False`` (the default) a pixel is only set when its centre
