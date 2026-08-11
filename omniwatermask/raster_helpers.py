@@ -54,18 +54,18 @@ def export_to_disk(
     embedded inside the GeoTIFF (``GDAL_TIFF_INTERNAL_MASK``) rather than written
     as a separate ``.tif.msk`` sidecar, so it travels with the file.
     """
-    src = rio.open(source_path)
-    profile = {
-        "dtype": array.dtype,
-        "count": array.shape[0],
-        "compress": "lzw",
-        "nodata": None,
-        "driver": "GTiff",
-        "height": array.shape[1],
-        "width": array.shape[2],
-        "transform": src.transform,
-        "crs": src.crs,
-    }
+    with rio.open(source_path) as src:
+        profile = {
+            "dtype": array.dtype,
+            "count": array.shape[0],
+            "compress": "lzw",
+            "nodata": None,
+            "driver": "GTiff",
+            "height": array.shape[1],
+            "width": array.shape[2],
+            "transform": src.transform,
+            "crs": src.crs,
+        }
 
     with rio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with rio.open(export_path, "w", **profile) as dst:

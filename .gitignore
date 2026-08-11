@@ -27,3 +27,4 @@ OWM_cache/*
 data/S2A_56HLH_20231011_0_L2A_RGBNIR.tif
 examples/water_vectors_cache/gdfs/*.parquet
 examples/water_vectors_cache/*.db
+*.tif.aux.xml

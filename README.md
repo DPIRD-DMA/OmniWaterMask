@@ -86,7 +86,9 @@ water_mask_path = make_water_mask(
 
 ## Usage tips
 
--   OWM requires an active internet connection to function properly, as it needs to download OpenStreetMap (OSM) data.
+-   OWM requires an active internet connection to function properly, as it needs to download vector data.
+-   Vector data comes from [Overture Maps](https://overturemaps.org) by default. If you would rather query OpenStreetMap live through the Overpass API, set `vector_source="osm"`. Overture serves static monthly GeoParquet releases from cloud storage, so it avoids the rate limits and timeouts Overpass returns on large or dense bounding boxes. The underlying data is largely the same — Overture's water and road layers are derived from OSM — though its building footprints add machine-learning-derived data beyond OSM. Note that Overture files a few landforms (`cape`, `blowhole`, `shoal`) under its water theme; OWM filters these out so they are not treated as water.
+-   If a scene's vector data cannot be fetched, that scene is skipped rather than processed without it — a mask built without its vector targets looks plausible but is quietly worse. Overture fetches retry transient failures first (3 attempts, 2s then 4s apart). A skipped scene is logged at ERROR, is left out of the returned list of output paths, and has no file written, so re-running the same call reprocesses it while the rest of the batch is untouched.
 -   Hardware acceleration is strongly recommended:
     -   NVIDIA GPU
     -   Apple Silicon Mac
@@ -142,9 +144,13 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 -    `use_cache`: Whether to cache vector data processing results. Defaults to True
 
--    `use_osm_building`: Whether to use OpenStreetMap building data to reduce false positives. Defaults to True
+-    `use_osm_building`: Whether to use building data to reduce false positives. Defaults to True
 
--    `use_osm_roads`: Whether to use OpenStreetMap road data to reduce false positives. Defaults to True
+-    `use_osm_roads`: Whether to use road data to reduce false positives. Defaults to True
+
+-    `vector_source`: Where water, road and building vectors come from — `"overture"` (Overture Maps GeoParquet) or `"osm"` (OpenStreetMap via the Overpass API). Defaults to "overture"
+
+-    `include_ocean`: Whether Overture ocean polygons count as positive water targets. These cover everything seaward of the OSM coastline, which the OSM tag set does not provide. Set to False if coastline/tide offsets cause false positives on your scenes. Only applies when `vector_source="overture"`. Defaults to True
 
 -    `cache_dir`: Directory for storing cached vector data. Defaults to "OWM_cache" in current directory
 

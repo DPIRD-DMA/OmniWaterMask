@@ -19,6 +19,12 @@ except ImportError:
 
 from .download_models import get_models
 from .raster_helpers import export_to_disk, resample_input
+from .target_builders import (
+    OSM,
+    TargetBuildError,
+    check_osmnx_version,
+    validate_vector_source,
+)
 from .vector_cache import initialize_db
 from .water_inf_helpers import integrate_water_detection_methods
 
@@ -83,6 +89,8 @@ def make_water_mask(
     use_osm_water: bool = True,
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
+    vector_source: str = "overture",
+    include_ocean: bool = True,
     cache_dir: Optional[Path] = None,
     destination_model_dir: Union[str, Path, None] = None,
     model_download_source: str = "hugging_face",
@@ -107,6 +115,8 @@ def make_water_mask(
         use_osm_water=use_osm_water,
         use_osm_building=use_osm_building,
         use_osm_roads=use_osm_roads,
+        vector_source=vector_source,
+        include_ocean=include_ocean,
         aux_vector_sources=aux_vector_sources,
         aux_negative_vector_sources=aux_negative_vector_sources,
         inference_dtype=inference_dtype,
@@ -136,6 +146,8 @@ def make_water_mask_debug(
     use_ndwi: bool = True,
     use_osm_building: bool = True,
     use_osm_roads: bool = True,
+    vector_source: str = "overture",
+    include_ocean: bool = True,
     aux_vector_sources: Optional[list[Path]] = None,
     aux_negative_vector_sources: Optional[list[Path]] = None,
     resample_res: Optional[Union[int, float]] = None,
@@ -161,6 +173,14 @@ def make_water_mask_debug(
         aux_negative_vector_sources = []
     if cache_dir is None:
         cache_dir = Path.cwd() / "water_vectors_cache"
+
+    # build_targets validates both of these too, but only once it is running
+    # per-scene in its own thread, where a raise is lost and the caller sees
+    # nothing but a thread that exited without a result. Checking here fails the
+    # call before any scene is opened, with the error that explains the problem.
+    validate_vector_source(vector_source)
+    if vector_source == OSM and (use_osm_water or use_osm_building or use_osm_roads):
+        check_osmnx_version()
 
     # Make sure that the correct options are set
     if not use_osm_water and not aux_vector_sources:
@@ -225,42 +245,61 @@ def make_water_mask_debug(
 
         debug_str = "_debug" if debug_output else ""
         export_path = output_dir_set / (input_image.stem + f"_{version}{debug_str}.tif")
-        output_paths.append(export_path)
 
         if export_path.exists() and not overwrite:
             logging.info(f"Skipping {input_image.name} as it already exists")
+            output_paths.append(export_path)
             p_bar.update(1)
             p_bar.refresh()
             continue
 
         logging.info(f"Processing {input_image.name}")
-        input_src = rio.open(input_image)
-        input_bands = input_src.read(band_order)
+        with rio.open(input_image) as input_src:
+            input_bands = input_src.read(band_order)
 
         logging.info(f"Predicting water mask for {input_image.name}")
-        water_predictions, layer_names, nodata_mask = integrate_water_detection_methods(
-            input_bands=input_bands,
-            input_path=input_image,
-            debug_output=debug_output,
-            inference_dtype=inference_dtype_torch,
-            inference_device=inference_device_torch,
-            inference_patch_size=inference_patch_size,
-            inference_overlap_size=inference_overlap_size,
-            batch_size=batch_size,
-            use_osm_water=use_osm_water,
-            aux_vector_sources=aux_vector_sources,
-            aux_negative_vector_sources=aux_negative_vector_sources,
-            mosaic_device=mosaic_device,
-            use_ndwi=use_ndwi,
-            use_model=use_model,
-            use_osm_building_mask=use_osm_building,
-            use_osm_roads_mask=use_osm_roads,
-            cache_dir=cache_dir,
-            use_cache=use_cache,
-            optimise_model=optimise_model,
-            no_data_value=no_data_value,
-            models=models,
-        )
+        try:
+            water_predictions, layer_names, nodata_mask = (
+                integrate_water_detection_methods(
+                    input_bands=input_bands,
+                    input_path=input_image,
+                    debug_output=debug_output,
+                    inference_dtype=inference_dtype_torch,
+                    inference_device=inference_device_torch,
+                    inference_patch_size=inference_patch_size,
+                    inference_overlap_size=inference_overlap_size,
+                    batch_size=batch_size,
+                    use_osm_water=use_osm_water,
+                    aux_vector_sources=aux_vector_sources,
+                    aux_negative_vector_sources=aux_negative_vector_sources,
+                    mosaic_device=mosaic_device,
+                    use_ndwi=use_ndwi,
+                    use_model=use_model,
+                    use_osm_building_mask=use_osm_building,
+                    use_osm_roads_mask=use_osm_roads,
+                    vector_source=vector_source,
+                    include_ocean=include_ocean,
+                    cache_dir=cache_dir,
+                    use_cache=use_cache,
+                    optimise_model=optimise_model,
+                    no_data_value=no_data_value,
+                    models=models,
+                )
+            )
+        except TargetBuildError:
+            # Export nothing rather than a mask built without its vector
+            # targets: it would look plausible, and the file on disk would make
+            # a re-run skip the scene. Leaving no file means the next run
+            # reprocesses it, so a transient outage costs a retry, not a batch.
+            logging.error(
+                f"Skipping {input_image.name}: its vector targets could not be "
+                f"built. See the traceback above. Re-run to retry this scene."
+            )
+            p_bar.update(1)
+            p_bar.refresh()
+            continue
+
+        output_paths.append(export_path)
         logging.info(f"Exporting {input_image.name} to {export_path}")
         export_to_disk(
             array=water_predictions,

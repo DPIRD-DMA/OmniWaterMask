@@ -14,8 +14,9 @@ dependencies = [
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
     "osmnx>=2.0.0",
+    "overturemaps>=1.0.0",
     "scipy>=1.10.0",
-    "pyarrow>=10.0.0",
+    "pyarrow>=15.0.2", # floor set by overturemaps; declaring less is not installable
     "huggingface_hub>=0.28.1",
     "safetensors>=0.3.0",
     "gdown>=5.1.0",
@@ -25,9 +26,14 @@ dependencies = [
     "tqdm>=4.0",
     "platformdirs>=4.0.0",
     "fastai>=2.7",
-    # spaCy 3.8.14 advertises Python 3.14 support but does not publish an
-    # installable cp314 artifact for the GitHub Actions Linux runner.
-    "spacy!=3.8.14",
+    # spaCy 3.8.14 and 3.8.15 publish neither a cp314 wheel nor an sdist, so on
+    # Python 3.14 there is nothing for the resolver to install; 3.8.13 and
+    # earlier ship both. Scoped to 3.14 so other interpreters, where these
+    # versions install fine, are not held back, and expressed as exclusions so a
+    # later release that restores cp314 artifacts is picked up automatically.
+    # This is purely about what PyPI carries, so distributions that build from
+    # source — the conda-forge recipe — should not mirror it.
+    "spacy!=3.8.14,!=3.8.15; python_version >= '3.14'",
 ]
 license = "MIT"
 license-files = ["LICENSE"]

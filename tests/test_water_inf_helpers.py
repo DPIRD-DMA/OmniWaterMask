@@ -1,7 +1,14 @@
+from queue import Queue
+from threading import Thread
+
 import numpy as np
+import pytest
 import torch
 
+from omniwatermask.target_builders import TargetBuildError
 from omniwatermask.water_inf_helpers import (
+    _collect_target,
+    _try_collect_target,
     get_masked_iou,
     get_NDWI,
     make_composite_output,
@@ -170,3 +177,64 @@ class TestMakeCompositeOutput:
         layers = {"a": torch.ones(5, 5, dtype=torch.int32)}
         output, _ = make_composite_output(layers)
         assert output.dtype == np.float32
+
+
+class TestCollectTarget:
+    """build_targets runs in a thread, so its result comes back by queue."""
+
+    @staticmethod
+    def _run(target):
+        thread = Thread(target=target)
+        thread.start()
+        return thread
+
+    def test_returns_the_queued_result(self):
+        queue: Queue = Queue()
+        expected = torch.ones(4, 4, dtype=torch.bool)
+        thread = self._run(lambda: queue.put(expected))
+        assert torch.equal(_collect_target(thread, queue, "vector"), expected)
+
+    def test_treats_a_none_as_nothing_to_build(self):
+        """None means no targets were asked for, which is not a failure."""
+        queue: Queue = Queue()
+        thread = self._run(lambda: queue.put(None))
+        assert _collect_target(thread, queue, "vector") is None
+
+    def test_reraises_a_queued_failure(self):
+        """build_targets cannot raise from its thread, so it queues the error
+        instead. Ignoring it would export a mask with no vector targets."""
+        queue: Queue = Queue()
+        error = TargetBuildError("Could not build vector targets")
+        thread = self._run(lambda: queue.put(error))
+        with pytest.raises(TargetBuildError):
+            _collect_target(thread, queue, "vector")
+
+    def test_try_collect_returns_the_failure_instead_of_raising(self):
+        """The caller needs every thread joined before any failure propagates."""
+        queue: Queue = Queue()
+        error = TargetBuildError("Could not build vector targets")
+        thread = self._run(lambda: queue.put(error))
+        result, returned = _try_collect_target(thread, queue, "vector")
+        assert result is None
+        assert returned is error
+
+    def test_try_collect_returns_no_error_on_success(self):
+        queue: Queue = Queue()
+        expected = torch.ones(4, 4, dtype=torch.bool)
+        thread = self._run(lambda: queue.put(expected))
+        result, returned = _try_collect_target(thread, queue, "vector")
+        assert torch.equal(result, expected)
+        assert returned is None
+
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+    def test_raises_when_the_thread_dies_without_reporting(self):
+        """An empty queue means build_targets raised before it could report.
+        Reading it blind would block forever."""
+
+        def explode():
+            raise ValueError("Unknown vector_source: 'overtrue'")
+
+        queue: Queue = Queue()
+        thread = self._run(explode)
+        with pytest.raises(RuntimeError, match="exited without a result"):
+            _collect_target(thread, queue, "vector")

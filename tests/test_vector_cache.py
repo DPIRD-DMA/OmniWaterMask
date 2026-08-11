@@ -33,6 +33,8 @@ class TestInitializeDb:
                 "water",
                 "roads",
                 "buildings",
+                "source",
+                "ocean",
                 "gdf_uid",
             }
 
@@ -76,6 +78,31 @@ class TestCheckDb:
         # Search with roads=True instead — should not match
         _, found = check_db(cache_dir, polygon, [], water=False, roads=True)
         assert found is False
+
+    def test_different_source_no_match(self, cache_dir):
+        """Overture and OSM produce different vectors for the same bounds."""
+        initialize_db(cache_dir)
+        polygon = box(0, 0, 1, 1)
+        test_gdf = gpd.GeoDataFrame(geometry=[Point(0.5, 0.5)], crs="EPSG:4326")
+        add_to_db(cache_dir, polygon, [], test_gdf, water=True, source="overture")
+
+        _, found = check_db(cache_dir, polygon, [], water=True, source="osm")
+        assert found is False
+
+        _, found = check_db(cache_dir, polygon, [], water=True, source="overture")
+        assert found is True
+
+    def test_different_ocean_flag_no_match(self, cache_dir):
+        initialize_db(cache_dir)
+        polygon = box(0, 0, 1, 1)
+        test_gdf = gpd.GeoDataFrame(geometry=[Point(0.5, 0.5)], crs="EPSG:4326")
+        add_to_db(cache_dir, polygon, [], test_gdf, water=True, ocean=True)
+
+        _, found = check_db(cache_dir, polygon, [], water=True, ocean=False)
+        assert found is False
+
+        _, found = check_db(cache_dir, polygon, [], water=True, ocean=True)
+        assert found is True
 
 
 class TestAddToDb:
