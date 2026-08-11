@@ -10,6 +10,7 @@
 - `vector_source` parameter on `make_water_mask` and `make_water_mask_debug`, accepting `"overture"` (default) or `"osm"`.
 - `include_ocean` parameter (default True). Overture's `ocean` water features cover everything seaward of the OSM coastline — signal the previous OSM tag set had no equivalent for, since it did not query `natural=coastline`. Set to False where coastline/tide offsets cause false positives.
 - `overturemaps>=1.0.0` dependency. `osmnx` is retained for the `vector_source="osm"` path.
+- The spaCy exclusion now covers 3.8.15 as well as 3.8.14, and is scoped to Python 3.14 with an environment marker. Both releases publish neither a cp314 wheel nor an sdist, so there is nothing installable on 3.14; 3.8.13 ships both. Other interpreters are no longer held back by the exclusion, and a later release that restores cp314 artifacts will be picked up without another change here.
 - The declared `pyarrow` floor is raised from 10.0.0 to 15.0.2. `overturemaps` requires that version, so 10.0.0 was never actually installable alongside it; the old floor only misdescribed what the package supports.
 
 ### Fixed
