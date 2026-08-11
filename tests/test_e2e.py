@@ -19,6 +19,10 @@ from rasterio.windows import Window
 from shapely.geometry import box
 
 from omniwatermask import make_water_mask, make_water_mask_debug
+from omniwatermask.overture_source import (
+    OVERTURE_LAND_CLASSES,
+    get_overture_features,
+)
 from omniwatermask.raster_helpers import (
     export_to_disk,
     rasterize_vector,
@@ -547,3 +551,141 @@ class TestPipelineConfigurations:
         with rio.open(paths[0]) as src:
             water = src.read(1)
             assert set(np.unique(water)).issubset({0, 1})
+
+
+# Fixed real-world bounding boxes. Small enough to fetch quickly, chosen for
+# what they contain: dense urban water/road/building coverage, an open-ocean
+# edge, and shoal polygons filed under the water theme.
+SYDNEY_HARBOUR_BBOX = (151.20, -33.87, 151.24, -33.84)
+SYDNEY_COAST_BBOX = (151.28, -33.92, 151.34, -33.86)
+CAPE_COD_BBOX = (-70.25, 41.55, -69.95, 41.80)
+
+
+def _bounds_gdf(bbox):
+    return gpd.GeoDataFrame(geometry=[box(*bbox)], crs="EPSG:4326")
+
+
+@pytest.fixture(scope="session")
+def sydney_water():
+    return get_overture_features(_bounds_gdf(SYDNEY_HARBOUR_BBOX), kind="water")
+
+
+@pytest.fixture(scope="session")
+def cape_cod_water():
+    return get_overture_features(_bounds_gdf(CAPE_COD_BBOX), kind="water")
+
+
+class TestOvertureLiveFetch:
+    """Real fetches against Overture's GeoParquet release.
+
+    Everything else about the Overture path is mocked, so these are the only
+    tests that would catch an upstream schema, subtype vocabulary or client API
+    change — the failure mode this integration is most exposed to.
+    """
+
+    @pytest.mark.parametrize("kind", ["water", "roads", "buildings"])
+    def test_each_kind_returns_usable_features(self, kind):
+        result = get_overture_features(_bounds_gdf(SYDNEY_HARBOUR_BBOX), kind=kind)
+
+        assert len(result) > 0, f"no {kind} features over Sydney Harbour"
+        assert result.crs.to_epsg() == 4326
+        assert not result.geometry.isna().any()
+        # Nested attribute columns must be dropped before the parquet cache.
+        assert set(result.columns) <= {"subtype", "class", "geometry"}
+        assert "geometry" in result.columns
+
+    def test_features_are_clipped_to_bounds(self, sydney_water):
+        requested = box(*SYDNEY_HARBOUR_BBOX)
+        assert sydney_water.geometry.within(requested.buffer(1e-9)).all()
+
+    def test_roads_are_only_road_segments(self):
+        """The transportation theme also carries rail and water segments."""
+        roads = get_overture_features(_bounds_gdf(SYDNEY_HARBOUR_BBOX), kind="roads")
+        assert set(roads["subtype"]) == {"road"}
+
+    def test_ocean_covers_the_seaward_side_of_a_coastal_scene(self):
+        water = get_overture_features(_bounds_gdf(SYDNEY_COAST_BBOX), kind="water")
+        ocean = water[water["subtype"] == "ocean"]
+        assert len(ocean) > 0, "expected an ocean polygon on a coastal bbox"
+
+        scene_area = _bounds_gdf(SYDNEY_COAST_BBOX).to_crs("EPSG:3857").area.iloc[0]
+        ocean_area = ocean.to_crs("EPSG:3857").area.sum()
+        # This bbox is mostly open water; the exact fraction is release
+        # dependent, so assert only that ocean is the dominant feature.
+        assert ocean_area / scene_area > 0.5
+
+    def test_include_ocean_false_drops_only_the_ocean(self):
+        bounds = _bounds_gdf(SYDNEY_COAST_BBOX)
+        with_ocean = get_overture_features(bounds, kind="water")
+        without_ocean = get_overture_features(bounds, kind="water", include_ocean=False)
+
+        assert "ocean" in set(with_ocean["subtype"])
+        assert "ocean" not in set(without_ocean["subtype"])
+        n_ocean = (with_ocean["subtype"] == "ocean").sum()
+        assert len(without_ocean) == len(with_ocean) - n_ocean
+
+    def test_no_land_classes_in_water(self, sydney_water, cape_cod_water):
+        """Capes, blowholes and shoals are landforms Overture files under the
+        water theme. Cape Cod is included because it has shoal *polygons* —
+        capes are usually points, which combine_vector_targets drops anyway.
+        """
+        for water in (sydney_water, cape_cod_water):
+            assert not water["class"].isin(OVERTURE_LAND_CLASSES).any()
+
+    def test_water_classes_are_all_in_the_published_schema(self, cape_cod_water):
+        """A new class value upstream is the signal to revisit the land filter."""
+        known = {
+            "basin",
+            "bay",
+            "blowhole",
+            "canal",
+            "cape",
+            "ditch",
+            "dock",
+            "drain",
+            "fairway",
+            "fish_pass",
+            "fishpond",
+            "geyser",
+            "hot_spring",
+            "lagoon",
+            "lake",
+            "moat",
+            "ocean",
+            "oxbow",
+            "pond",
+            "reflecting_pool",
+            "reservoir",
+            "river",
+            "salt_pond",
+            "sea",
+            "sewage",
+            "shoal",
+            "spring",
+            "strait",
+            "stream",
+            "swimming_pool",
+            "tidal_channel",
+            "wastewater",
+            "water",
+            "water_storage",
+            "waterfall",
+        }
+        seen = set(cape_cod_water["class"].dropna())
+        assert seen <= known, f"unrecognised water classes: {sorted(seen - known)}"
+
+    def test_survives_the_parquet_cache_round_trip(self, sydney_water, tmp_path):
+        """Real Overture frames must be writable to the on-disk cache — the
+        reason KEEP_COLUMNS drops the nested attribute columns."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        initialize_db(cache_dir)
+        polygon = box(*SYDNEY_HARBOUR_BBOX)
+
+        add_to_db(cache_dir, polygon, [], sydney_water, water=True, source="overture")
+        restored, found = check_db(
+            cache_dir, polygon, [], water=True, source="overture"
+        )
+
+        assert found is True
+        assert len(restored) == len(sydney_water)

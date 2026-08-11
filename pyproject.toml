@@ -14,8 +14,9 @@ dependencies = [
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
     "osmnx>=2.0.0",
+    "overturemaps>=1.0.0",
     "scipy>=1.10.0",
-    "pyarrow>=10.0.0",
+    "pyarrow>=15.0.2", # floor set by overturemaps; declaring less is not installable
     "huggingface_hub>=0.28.1",
     "safetensors>=0.3.0",
     "gdown>=5.1.0",
@@ -26,7 +27,9 @@ dependencies = [
     "platformdirs>=4.0.0",
     "fastai>=2.7",
     # spaCy 3.8.14 advertises Python 3.14 support but does not publish an
-    # installable cp314 artifact for the GitHub Actions Linux runner.
+    # installable cp314 artifact for the GitHub Actions Linux runner. This is a
+    # wheel availability problem, so it does not apply to distributions that
+    # build from source — the conda-forge recipe should not carry this exclusion.
     "spacy!=3.8.14",
 ]
 license = "MIT"

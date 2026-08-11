@@ -9,7 +9,10 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon
 
-DB_NAME = "geodataframes_v1.db"
+# v2 adds the source and ocean columns. The name is bumped rather than migrated
+# so an existing v1 cache is simply ignored: its rows carry no record of which
+# vector source produced them.
+DB_NAME = "geodataframes_v2.db"
 GDF_DIR = "gdfs"
 
 
@@ -32,6 +35,8 @@ def initialize_db(cache_dir: Path) -> None:
                 water BOOLEAN NOT NULL,
                 roads BOOLEAN NOT NULL,
                 buildings BOOLEAN NOT NULL,
+                source TEXT NOT NULL,
+                ocean BOOLEAN NOT NULL,
                 gdf_uid TEXT NOT NULL
             )
         """)
@@ -45,6 +50,8 @@ def check_db(
     water: bool = False,
     roads: bool = False,
     buildings: bool = False,
+    source: str = "overture",
+    ocean: bool = False,
 ) -> tuple[gpd.GeoDataFrame, bool]:
     """
     Checks the database for an existing GeoDataFrame matching the given parameters.
@@ -56,6 +63,8 @@ def check_db(
         water: Boolean flag for water.
         roads: Boolean flag for roads.
         buildings: Boolean flag for buildings.
+        source: Vector source the entry was built from ("overture" or "osm").
+        ocean: Boolean flag for whether ocean water features were included.
 
     Returns:
         The matching GeoDataFrame if found, otherwise False.
@@ -69,8 +78,17 @@ def check_db(
             SELECT gdf_uid FROM geodataframes
             WHERE polygon = ? AND paths = ?
             AND water = ? AND roads = ? AND buildings = ?
+            AND source = ? AND ocean = ?
         """,
-            (polygon.wkt, json.dumps([str(p) for p in paths]), water, roads, buildings),
+            (
+                polygon.wkt,
+                json.dumps([str(p) for p in paths]),
+                water,
+                roads,
+                buildings,
+                source,
+                ocean,
+            ),
         )
         row = cursor.fetchone()
         if row:
@@ -93,6 +111,8 @@ def add_to_db(
     water: bool = False,
     roads: bool = False,
     buildings: bool = False,
+    source: str = "overture",
+    ocean: bool = False,
 ) -> None:
     """
     Adds a new GeoDataFrame entry to the database.
@@ -104,6 +124,8 @@ def add_to_db(
         water: Boolean flag for water.
         roads: Boolean flag for roads.
         buildings: Boolean flag for buildings.
+        source: Vector source the entry was built from ("overture" or "osm").
+        ocean: Boolean flag for whether ocean water features were included.
         gdf: The GeoDataFrame to store.
     """
     db_path = cache_dir / DB_NAME
@@ -116,8 +138,9 @@ def add_to_db(
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO geodataframes (polygon, paths, water, roads, buildings, gdf_uid)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO geodataframes
+            (polygon, paths, water, roads, buildings, source, ocean, gdf_uid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 polygon.wkt,
@@ -125,6 +148,8 @@ def add_to_db(
                 water,
                 roads,
                 buildings,
+                source,
+                ocean,
                 gdf_uid,
             ),
         )
@@ -160,7 +185,7 @@ def view_cache_db(cache_dir: Path) -> pd.DataFrame:
             df["paths"] = df["paths"].apply(json.loads)
 
             # Convert boolean integers to actual booleans
-            bool_columns = ["water", "roads", "buildings"]
+            bool_columns = ["water", "roads", "buildings", "ocean"]
             for col in bool_columns:
                 df[col] = df[col].astype(bool)
 

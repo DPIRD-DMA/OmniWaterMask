@@ -17,6 +17,7 @@ import rasterio as rio
 import torch
 
 from omniwatermask import make_water_mask, make_water_mask_debug
+from omniwatermask.target_builders import TargetBuildError
 from omniwatermask.water_inf_helpers import integrate_water_detection_methods
 
 # Synthetic raster band order (conftest writes Blue, Green, Red, NIR)
@@ -240,3 +241,100 @@ class TestMakeWaterMaskPipeline:
                 use_model=False,
                 cache_dir=tmp_path / "cache",
             )
+
+
+class TestTargetThreadDatasetHandles:
+    """The target threads read from datasets opened by the integration layer.
+
+    ``build_targets`` does not close what it is handed - it is also called
+    directly with a dataset its caller goes on to reuse - so the integration
+    layer owns those handles. Leaking one per scene turns a large batch into
+    file-descriptor exhaustion, so they must be closed however the scene ends.
+    """
+
+    @staticmethod
+    def _record_opens(monkeypatch):
+        """Collect every dataset the integration layer opens."""
+        opened = []
+        real_open = rio.open
+
+        def recording_open(*args, **kwargs):
+            src = real_open(*args, **kwargs)
+            opened.append(src)
+            return src
+
+        monkeypatch.setattr("omniwatermask.water_inf_helpers.rio.open", recording_open)
+        return opened
+
+    @staticmethod
+    def _stub_build_targets(monkeypatch, result=None, error=None):
+        """Replace the real fetch so no network is touched."""
+
+        def fake_build_targets(queue=None, **kwargs):
+            outcome = error if error is not None else result
+            if queue is not None:
+                queue.put(outcome)
+                return queue
+            if error is not None:
+                raise error
+            return result
+
+        monkeypatch.setattr(
+            "omniwatermask.water_inf_helpers.build_targets", fake_build_targets
+        )
+
+    def _integrate_with_targets(self, sample_geotiff, bands, tmp_path):
+        """Both target threads on, so both handles are opened."""
+        return _integrate(
+            sample_geotiff,
+            bands,
+            tmp_path,
+            use_osm_water=True,
+            use_osm_building_mask=True,
+            use_osm_roads_mask=True,
+        )
+
+    def test_closed_after_a_successful_run(
+        self, mock_model, sample_geotiff, synthetic_bands, tmp_path, monkeypatch
+    ):
+        opened = self._record_opens(monkeypatch)
+        self._stub_build_targets(monkeypatch)
+        self._integrate_with_targets(sample_geotiff, synthetic_bands, tmp_path)
+
+        assert len(opened) == 2, "expected one handle per target thread"
+        assert all(src.closed for src in opened)
+
+    def test_closed_when_a_target_build_fails(
+        self, mock_model, sample_geotiff, synthetic_bands, tmp_path, monkeypatch
+    ):
+        """The scene is skipped on TargetBuildError, but not at the cost of a
+        leaked handle - a widespread outage would leak one per scene."""
+        opened = self._record_opens(monkeypatch)
+        self._stub_build_targets(monkeypatch, error=TargetBuildError("no vectors"))
+
+        with pytest.raises(TargetBuildError):
+            self._integrate_with_targets(sample_geotiff, synthetic_bands, tmp_path)
+
+        assert len(opened) == 2
+        assert all(src.closed for src in opened)
+
+    def test_closed_when_model_inference_raises(
+        self, mock_model, sample_geotiff, synthetic_bands, tmp_path, monkeypatch
+    ):
+        """Inference runs while the target threads are still going, so a failure
+        there is the case the handles are most likely to escape from."""
+        opened = self._record_opens(monkeypatch)
+        self._stub_build_targets(monkeypatch)
+
+        def exploding_inference(*args, **kwargs):
+            raise RuntimeError("out of memory")
+
+        monkeypatch.setattr(
+            "omniwatermask.water_inf_helpers.predict_from_array", exploding_inference
+        )
+
+        with pytest.raises(RuntimeError, match="out of memory"):
+            self._integrate_with_targets(sample_geotiff, synthetic_bands, tmp_path)
+
+        assert len(opened) == 2
+        assert all(src.closed for src in opened)

@@ -13,10 +13,66 @@ from packaging import version
 from pyproj import CRS
 from shapely.geometry import box
 
+from .overture_source import get_overture_features
 from .raster_helpers import rasterize_vector
 from .vector_cache import add_to_db, check_db
 
 REQUIRED_VERSION = "2.0.0"
+
+OVERTURE = "overture"
+OSM = "osm"
+VECTOR_SOURCES = (OVERTURE, OSM)
+
+
+class TargetBuildError(RuntimeError):
+    """A scene's vector targets could not be built.
+
+    Raised in place of returning targets, so a scene is skipped rather than
+    exported from NDWI and the model alone. A mask built without its vector
+    targets is not obviously wrong on inspection, so it must not be written.
+    """
+
+
+def validate_vector_source(vector_source: str) -> None:
+    """Raise if ``vector_source`` is not one this library knows about."""
+    if vector_source not in VECTOR_SOURCES:
+        raise ValueError(
+            f"Unknown vector_source: {vector_source!r}. "
+            f"Expected one of {list(VECTOR_SOURCES)}."
+        )
+
+
+def check_osmnx_version() -> None:
+    """Raise if the installed osmnx is too old for the Overpass path."""
+    if version.parse(ox.__version__) < version.parse(REQUIRED_VERSION):
+        raise ImportError(
+            f"Your installed version of osmnx ({ox.__version__}) is too old. "
+            f"This library requires osmnx version {REQUIRED_VERSION} or above. "
+            f"Please upgrade using 'pip install osmnx>=2.0.0'."
+        )
+
+
+def _route_osmnx_logging() -> None:
+    """Send osmnx's own log messages to the standard logging module.
+
+    Overpass rate-limiting is handled inside osmnx, which pauses for its
+    advertised slot time and retries 429/504 responses after 55s. It reports all
+    of that through ``osmnx.utils.log``, which by default writes nowhere - so an
+    overloaded Overpass looks like a multi-minute hang with no output.
+
+    ``utils.log`` only reaches a logger when ``settings.log_file`` is set, and
+    ``_get_logger`` attaches a file handler of its own unless the logger already
+    has one. Adding a NullHandler first claims that slot, so the messages
+    propagate to the root logger and OWM's configuration instead of to a file
+    under ``./logs``. The level is left unset so it inherits whatever the caller
+    configured; the 429/504 retry notice is logged at WARNING and shows up even
+    under Python's default configuration.
+    """
+    osmnx_logger = logging.getLogger(ox.settings.log_name)
+    if not osmnx_logger.handlers:
+        osmnx_logger.addHandler(logging.NullHandler())
+    osmnx_logger.propagate = True
+    ox.settings.log_file = True
 
 
 def get_osm_features(
@@ -24,6 +80,7 @@ def get_osm_features(
     tags: dict[str, Any],
 ) -> gpd.GeoDataFrame:
     """Download OpenStreetMap features data within a bounding box"""
+    _route_osmnx_logging()
     gpd_bbox = gdf_bounds_4326.total_bounds
     try:
         features = ox.features_from_bbox(
@@ -35,7 +92,14 @@ def get_osm_features(
             ),
             tags=tags,
         )
-    except InsufficientResponseError:
+    except InsufficientResponseError as e:
+        # osmnx raises this both for a query that genuinely matched nothing and
+        # for a 200 response whose body would not parse as JSON. Only the first
+        # is an empty area; swallowing the second would cache a fetch failure as
+        # "no features here". The parse path chains the JSONDecodeError that
+        # caused it, so a cause means it was not an empty area.
+        if e.__cause__ is not None:
+            raise
         logging.info(f"No features found with tags: {tags} within bbox: {gpd_bbox}")
         return gpd.GeoDataFrame()
 
@@ -108,6 +172,12 @@ OSM_water_tags: dict[str, Any] = {
     "leisure": ["swimming_pool"],
 }
 
+OSM_tags_by_kind: dict[str, dict[str, Any]] = {
+    "water": OSM_water_tags,
+    "roads": OSM_roads_tags,
+    "buildings": OSM_buildings_tags,
+}
+
 
 def build_targets(
     raster_src: rio.DatasetReader,
@@ -119,6 +189,8 @@ def build_targets(
     osm_buildings: bool = False,
     use_cache: bool = True,
     all_touched: bool = False,
+    vector_source: str = OVERTURE,
+    include_ocean: bool = True,
     queue: Queue[Any] | None = None,
 ) -> torch.Tensor | None | Queue[Any]:
     """Combine vector for targets into a raster.
@@ -129,7 +201,31 @@ def build_targets(
     a whole pixel on. ``True`` flips a pixel if any feature touches it at all,
     which suits negative targets (buildings/roads) where we want to aggressively
     exclude anything those features clip.
+
+    ``vector_source`` selects where the water/road/building vectors come from:
+    ``"overture"`` reads Overture Maps GeoParquet from cloud storage, ``"osm"``
+    queries the Overpass API through ``osmnx``. ``include_ocean`` only applies
+    to Overture water targets.
+
+    Returns None when there was nothing to build. A build that was asked for and
+    failed raises ``TargetBuildError`` instead, so the caller can tell the two
+    apart. When ``queue`` is given the error is put on it rather than raised,
+    since this runs as a thread target where a raise would be lost; the reader
+    is expected to re-raise it.
     """
+    # Argument validation sits outside the try below so a misconfigured call
+    # fails immediately. Inside it, the catch-all would turn a typo into a full
+    # run with no vector targets and a single line in the log.
+    validate_vector_source(vector_source)
+
+    if (osm_water or osm_roads or osm_buildings) and vector_source == OSM:
+        check_osmnx_version()
+
+    # Ocean only ever affects water, so builds without it record ocean as
+    # off. Otherwise toggling the flag would needlessly invalidate cached
+    # building/road targets it cannot change.
+    include_ocean = include_ocean and osm_water and vector_source == OVERTURE
+
     try:
         if (
             not osm_water
@@ -142,14 +238,6 @@ def build_targets(
                 queue.put(None)
                 return queue
             return None
-
-        if osm_water or osm_roads or osm_buildings:
-            if version.parse(ox.__version__) < version.parse(REQUIRED_VERSION):
-                raise ImportError(
-                    f"Your installed version of osmnx ({ox.__version__}) is too old. "
-                    f"This library requires osmnx version {REQUIRED_VERSION} or above. "
-                    f"Please upgrade using 'pip install osmnx>=2.0.0'."
-                )
 
         gdf_bounds_4326 = get_wgs84_bounds_gdf_from_raster(raster_src)
 
@@ -165,6 +253,8 @@ def build_targets(
                 water=osm_water,
                 roads=osm_roads,
                 buildings=osm_buildings,
+                source=vector_source,
+                ocean=include_ocean,
             )
         else:
             cache_found = False
@@ -172,18 +262,25 @@ def build_targets(
         if not cache_found:
             all_vectors = []
 
-            for osm_type, tag in zip(
+            for kind, enabled in zip(
+                ["water", "roads", "buildings"],
                 [osm_water, osm_roads, osm_buildings],
-                [OSM_water_tags, OSM_roads_tags, OSM_buildings_tags],
                 strict=True,
             ):
-                if osm_type:
-                    response = get_osm_features(
-                        gdf_bounds_4326,
-                        tags=tag,
-                    )
-                    if response.empty or response is None:
-                        logging.info(f"No {tag} features found")
+                if enabled:
+                    if vector_source == OSM:
+                        response = get_osm_features(
+                            gdf_bounds_4326,
+                            tags=OSM_tags_by_kind[kind],
+                        )
+                    else:
+                        response = get_overture_features(
+                            gdf_bounds_4326,
+                            kind=kind,
+                            include_ocean=include_ocean,
+                        )
+                    if response is None or response.empty:
+                        logging.info(f"No {kind} features found")
 
                     all_vectors.append(response)
 
@@ -206,6 +303,8 @@ def build_targets(
                     water=osm_water,
                     roads=osm_roads,
                     buildings=osm_buildings,
+                    source=vector_source,
+                    ocean=include_ocean,
                 )
         if combined_vectors is None:
             if queue is not None:
@@ -226,8 +325,13 @@ def build_targets(
             return queue
         return result
     except Exception as e:
-        logging.error(f"Error building targets: {e}")
+        logging.exception("Error building targets")
+        error = TargetBuildError(f"Could not build vector targets: {e}")
+        # Raising from a thread would be lost, so the queue carries the error
+        # for the reader to re-raise. Chain it by hand: the raise below is what
+        # normally sets __cause__, and the queued copy needs it too.
         if queue is not None:
-            queue.put(None)
+            error.__cause__ = e
+            queue.put(error)
             return queue
-        return None
+        raise error from e

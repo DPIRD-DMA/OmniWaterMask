@@ -60,10 +60,29 @@ def optimise_threshold(
 ) -> tuple[torch.Tensor, float]:
     """Get the optimal threshold to align the source tensor with the target tensor"""
 
+    # Only ``source > threshold`` varies across the minimize_scalar evaluations,
+    # so the mask-dependent work (inverting the mask and zeroing the masked
+    # target) is hoisted out of the objective and computed once here instead of
+    # on every evaluation. Mirrors get_masked_iou's weighted=True branch.
+    if mask is not None:
+        inv_mask = ~mask
+        masked_target = torch.where(mask, torch.zeros_like(target), target)
+    else:
+        inv_mask = None
+        masked_target = target
+
     def objective(threshold: float) -> float:
-        return -get_masked_iou(
-            source=(source > threshold), target=target, mask=mask
-        )  # Negative because we want to maximize
+        source_bin = source > threshold
+        if inv_mask is not None:
+            source_bin = torch.logical_and(source_bin, inv_mask)
+        intersection = masked_target * source_bin
+        union = torch.maximum(source_bin, masked_target)
+        # Stack the two reductions so the device->host sync happens once.
+        intersection_sum, union_sum = torch.stack(
+            [intersection.sum(), union.sum()]
+        ).tolist()
+        iou_score = intersection_sum / union_sum if union_sum != 0 else 0
+        return -iou_score  # Negative because we want to maximize
 
     result = minimize_scalar(
         objective,
@@ -289,6 +308,51 @@ def make_composite_output(
     return np.stack(output_layers), layer_names
 
 
+def _collect_target(
+    thread: Thread,
+    result_queue: Queue[Any],
+    name: str,
+) -> Optional[torch.Tensor]:
+    """Join a target-building thread and take its result.
+
+    A failed build arrives as the exception itself, since raising inside the
+    thread would be lost; re-raise it here so the scene is skipped rather than
+    exported without its vector targets. A None means there was nothing to
+    build, which is not a failure. An empty queue means ``build_targets`` raised
+    before it could report - a bad argument, or an error outside its own try.
+    Reading the queue blind would block forever on that, so surface it too.
+    """
+    if thread.is_alive():
+        logging.info(f"Waiting for {name} targets to finish")
+    thread.join()
+
+    if result_queue.empty():
+        raise RuntimeError(
+            f"The {name} target thread exited without a result, meaning it raised "
+            f"before it could report. That exception went to stderr through the "
+            f"threading excepthook rather than through logging."
+        )
+    result: Union[torch.Tensor, BaseException, None] = result_queue.get()
+    if isinstance(result, BaseException):
+        raise result
+    return result
+
+
+def _try_collect_target(
+    thread: Thread,
+    result_queue: Queue[Any],
+    name: str,
+) -> tuple[Optional[torch.Tensor], Optional[BaseException]]:
+    """Collect a target thread, returning its failure rather than raising it.
+
+    Lets the caller join every thread before deciding what to propagate.
+    """
+    try:
+        return _collect_target(thread, result_queue, name), None
+    except Exception as e:
+        return None, e
+
+
 def integrate_water_detection_methods(
     input_bands: NDArray[Any],
     input_path: Path,
@@ -307,6 +371,8 @@ def integrate_water_detection_methods(
     use_model: bool = True,
     use_osm_building_mask: bool = True,
     use_osm_roads_mask: bool = True,
+    vector_source: str = "overture",
+    include_ocean: bool = True,
     aux_vector_sources: Optional[list[Path]] = None,
     aux_negative_vector_sources: Optional[list[Path]] = None,
     mosaic_device: Union[str, torch.device] = "cpu",
@@ -344,15 +410,23 @@ def integrate_water_detection_methods(
 
     logging.info("Building vector target in thread")
     vector_target_result_queue: Queue[Any] = Queue()
+    # The handles are owned here, not by build_targets, which is also called
+    # directly with a dataset its caller goes on to reuse. They are closed in
+    # the finally below, after both threads are joined - closing a dataset a
+    # thread is still reading from would take that thread down with it.
+    vector_raster_src = rio.open(input_path)
+    negative_raster_src: Optional[rio.DatasetReader] = None
     vector_target_thread = Thread(
         target=build_targets,
         kwargs={
-            "raster_src": rio.open(input_path),
+            "raster_src": vector_raster_src,
             "osm_water": use_osm_water,
             "aux_vector_sources": aux_vector_sources,
             "device": mosaic_device,
             "cache_dir": cache_dir,
             "use_cache": use_cache,
+            "vector_source": vector_source,
+            "include_ocean": include_ocean,
             # For now positive targets use all_touched=True (same as negative);
             # set to False to only flip pixels a feature mostly covers.
             "all_touched": True,
@@ -363,71 +437,99 @@ def integrate_water_detection_methods(
 
     negative_target_thread: Optional[Thread] = None
     negative_target_result_queue: Optional[Queue[Any]] = None
-    if use_osm_building_mask or use_osm_roads_mask:
-        logging.info("Building negative targets in thread")
-        negative_target_result_queue = Queue()
-        negative_target_thread = Thread(
-            target=build_targets,
-            kwargs={
-                "raster_src": rio.open(input_path),
-                "osm_buildings": use_osm_building_mask,
-                "osm_roads": use_osm_roads_mask,
-                "aux_vector_sources": aux_negative_vector_sources,
-                "device": mosaic_device,
-                "cache_dir": cache_dir,
-                "use_cache": use_cache,
-                "all_touched": True,
-                "queue": negative_target_result_queue,
-            },
+    vector_targets: Optional[torch.Tensor] = None
+    vector_negative_target: Optional[torch.Tensor] = None
+
+    try:
+        if use_osm_building_mask or use_osm_roads_mask:
+            logging.info("Building negative targets in thread")
+            negative_raster_src = rio.open(input_path)
+            negative_target_result_queue = Queue()
+            negative_target_thread = Thread(
+                target=build_targets,
+                kwargs={
+                    "raster_src": negative_raster_src,
+                    "osm_buildings": use_osm_building_mask,
+                    "osm_roads": use_osm_roads_mask,
+                    "aux_vector_sources": aux_negative_vector_sources,
+                    "device": mosaic_device,
+                    "cache_dir": cache_dir,
+                    "use_cache": use_cache,
+                    "vector_source": vector_source,
+                    "all_touched": True,
+                    "queue": negative_target_result_queue,
+                },
+            )
+            negative_target_thread.start()
+
+        if use_model:
+            logging.info("Predicting water mask using custom model")
+
+            model_conf = predict_from_array(
+                input_bands[:4],
+                custom_models=models,
+                batch_size=batch_size,
+                inference_dtype=inference_dtype,
+                export_confidence=True,
+                softmax_output=True,
+                no_data_value=no_data_value,
+                pred_classes=2,
+                inference_device=inference_device,
+                mosaic_device=mosaic_device,
+                patch_size=inference_patch_size,
+                patch_overlap=inference_overlap_size,
+            )
+            model_conf_tensor = torch.from_numpy(model_conf).to(mosaic_device)
+
+            model_conf_tensor = model_conf_tensor.to(inference_dtype)
+
+            model_conf_tensor = model_conf_tensor[1] - model_conf_tensor[0]
+
+            model_binary = model_conf_tensor > 0.0
+
+            ndwi_target.append(model_binary)
+        else:
+            model_conf_tensor = None
+            model_binary = None
+
+        vector_targets, vector_error = _try_collect_target(
+            vector_target_thread, vector_target_result_queue, "vector"
         )
-        negative_target_thread.start()
 
-    if use_model:
-        logging.info("Predicting water mask using custom model")
+        negative_error: Optional[BaseException] = None
+        if (
+            negative_target_thread is not None
+            and negative_target_result_queue is not None
+        ):
+            vector_negative_target, negative_error = _try_collect_target(
+                negative_target_thread, negative_target_result_queue, "negative vector"
+            )
 
-        model_conf = predict_from_array(
-            input_bands[:4],
-            custom_models=models,
-            batch_size=batch_size,
-            inference_dtype=inference_dtype,
-            export_confidence=True,
-            softmax_output=True,
-            no_data_value=no_data_value,
-            pred_classes=2,
-            inference_device=inference_device,
-            mosaic_device=mosaic_device,
-            patch_size=inference_patch_size,
-            patch_overlap=inference_overlap_size,
-        )
-        model_conf_tensor = torch.from_numpy(model_conf).to(mosaic_device)
-
-        model_conf_tensor = model_conf_tensor.to(inference_dtype)
-
-        model_conf_tensor = model_conf_tensor[1] - model_conf_tensor[0]
-
-        model_binary = model_conf_tensor > 0.0
-
-        ndwi_target.append(model_binary)
-    else:
-        model_conf_tensor = None
-        model_binary = None
-
-    if vector_target_thread.is_alive():
-        logging.info("Waiting for vector targets to finish")
-    vector_target_thread.join()
-    vector_targets = vector_target_result_queue.get()
+        # Both threads are joined before either failure propagates. Raising as
+        # soon as the first one failed would leave the other fetching on into
+        # the next scene, and a widespread outage would pile those up across a
+        # batch.
+        if vector_error is not None:
+            raise vector_error
+        if negative_error is not None:
+            raise negative_error
+    finally:
+        # Anything raised above - model inference, or a target failure being
+        # propagated - can leave a thread still running, so join before closing
+        # the datasets those threads read from.
+        vector_target_thread.join()
+        if negative_target_thread is not None:
+            negative_target_thread.join()
+        vector_raster_src.close()
+        if negative_raster_src is not None:
+            negative_raster_src.close()
 
     if vector_targets is not None:
         model_target.append(vector_targets)
         ndwi_target.append(vector_targets)
 
-    if negative_target_thread is not None and negative_target_result_queue is not None:
-        if negative_target_thread.is_alive():
-            logging.info("Waiting for negative targets to finish")
-        negative_target_thread.join()
-        vector_negative_target = negative_target_result_queue.get()
-        if vector_negative_target is not None:
-            negative_target.append(vector_negative_target)
+    if vector_negative_target is not None:
+        negative_target.append(vector_negative_target)
 
     if len(negative_target) > 0:
         negative_target_tensor: Optional[torch.Tensor] = (
