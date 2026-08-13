@@ -3,6 +3,11 @@ name: CI
 on:
   push:
   pull_request:
+  schedule:
+    # Sundays 00:00 UTC. No lockfile is committed, so uv resolves fresh each
+    # run and this catches upstream releases that break us before users hit them.
+    - cron: "0 0 * * 0"
+  workflow_dispatch:
 
 jobs:
   check:
