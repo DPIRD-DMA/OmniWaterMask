@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1] - Aug 13, 2026
+
+### Changed
+- The `numpy` upper bound is removed; the declared range is now `numpy>=2.0`, up from `numpy>=2.0,<2.4`. The cap was there to keep `numba` installable, but numba is not a runtime dependency — it reaches this project only through the dev group, via `s2mosaic` → `numbagg` → `numba` — so the bound constrained every install to protect a package users never receive. numba declares its own ceiling in any case (`numpy<2.6` as of 0.67), which the resolver honours without help here. A fresh resolve now reaches numpy 2.5.2 on Python 3.12+ and 2.4.6 on 3.11; 3.10 stays on 2.2.6, and 3.11 stops short of 2.5, because numpy itself dropped those interpreters.
+
+### Fixed
+- The source distribution no longer carries the example notebooks, shrinking it from 21.7 MB to 62.7 KB. `setuptools-scm` includes every git-tracked file in the sdist, which swept in three notebooks holding embedded output imagery — 36 MB uncompressed, and effectively the entire tarball. A `MANIFEST.in` now prunes `examples/` (and `.vscode/`); `tests/` is deliberately retained, since downstream packagers run the suite against the sdist. Wheels were never affected — they are built from the declared `packages` — so this changes nothing for a normal `pip install`, but it does cut what conda-forge and source builds have to fetch. The notebooks remain on GitHub, where the README links them.
+
 ## [0.6.0] - Aug 11, 2026
 
 ### Changed
