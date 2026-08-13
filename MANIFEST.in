@@ -1,0 +1,12 @@
+# setuptools-scm puts every git-tracked file in the sdist, which swept in the
+# example notebooks. They carry embedded output imagery — 36 MB across three
+# files — and made up essentially the whole 21 MB tarball, for content nobody
+# installing the package needs. They stay on GitHub, where the README links
+# them. The wheel was never affected; it is built from `packages` alone.
+prune examples
+
+# Editor config, of no use to anyone unpacking the sdist.
+prune .vscode
+
+# tests/ is kept deliberately: downstream packagers (conda-forge) run the suite
+# against the sdist.
