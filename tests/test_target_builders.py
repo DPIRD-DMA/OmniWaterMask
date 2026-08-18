@@ -65,7 +65,8 @@ class TestGetOsmFeatures:
     ):
         """osmnx reports a 200 whose body is not JSON as InsufficientResponseError
         too, chained from the JSONDecodeError. Swallowing that would cache a
-        fetch failure as "no features here"."""
+        fetch failure as "no features here", so it is re-raised as a
+        RuntimeError carrying the original as its cause."""
         from json import JSONDecodeError
 
         from osmnx._errors import InsufficientResponseError
@@ -74,8 +75,23 @@ class TestGetOsmFeatures:
         error.__cause__ = JSONDecodeError("Expecting value", "<html>", 0)
         mock_features.side_effect = error
 
-        with pytest.raises(InsufficientResponseError):
+        with pytest.raises(RuntimeError, match='vector_source="overture"') as excinfo:
             get_osm_features(sample_geodataframe_4326, tags={"natural": "water"})
+        assert excinfo.value.__cause__ is error
+
+    @patch("omniwatermask.target_builders.ox.features_from_bbox")
+    def test_wraps_a_non_overpass_failure_without_asserting_the_cause(
+        self, mock_features, sample_geodataframe_4326
+    ):
+        """A failure that is not an empty area must not be cached as "no
+        features here", but it may be a local bug rather than Overpass being
+        down, so the alternative source is offered conditionally."""
+        error = TypeError("unhashable type: 'list'")
+        mock_features.side_effect = error
+
+        with pytest.raises(RuntimeError, match="If Overpass") as excinfo:
+            get_osm_features(sample_geodataframe_4326, tags={"natural": "water"})
+        assert excinfo.value.__cause__ is error
 
 
 class TestOsmnxLogging:
