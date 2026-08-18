@@ -13,6 +13,9 @@ dependencies = [
     "omnicloudmask>=1.7.1",
     "opencv-python>=4.9.0.80",
     "geopandas>=1.0",
+    "pandas>=1.4.0",
+    "shapely>=2.0.0",
+    "pyproj>=3.3.0",
     "osmnx>=2.0.0",
     "overturemaps>=1.0.0",
     "scipy>=1.10.0",
@@ -25,6 +28,7 @@ dependencies = [
     "torch>=2.3.0",
     "tqdm>=4.0",
     "platformdirs>=4.0.0",
+    "packaging>=20.9",
     "fastai>=2.7",
     # spaCy 3.8.14 and 3.8.15 publish neither a cp314 wheel nor an sdist, so on
     # Python 3.14 there is nothing for the resolver to install; 3.8.13 and

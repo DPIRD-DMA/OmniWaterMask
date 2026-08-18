@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `pandas`, `shapely`, `pyproj` and `packaging` are now declared as dependencies. All four are imported at module scope — `pandas` by `download_models.py`, `target_builders.py` and `vector_cache.py`, `shapely` by `target_builders.py` and `vector_cache.py`, and `pyproj` and `packaging` by `target_builders.py` — so all four sit on the `import omniwatermask` path, but none of them appeared in `dependencies`. Every install has therefore been relying on them arriving transitively: the first three through `geopandas`, and `packaging` through `huggingface_hub`, which declares `packaging>=20.9`. Nothing has broken, because each is a hard requirement of a package this project does declare, but the imports would fail the moment an intermediary dropped one, and the failure would surface as a `ModuleNotFoundError` on import rather than as a resolver error at install time. The floors for `pandas`, `shapely` and `pyproj` mirror what `geopandas>=1.0` already imposes, since only long-stable API is used from each (`pd.concat`/`read_csv`, `shapely.geometry.box`, `CRS.from_epsg`) and declaring less would not be installable alongside geopandas rather than extending support.
+
 ## [0.6.2] - Aug 18, 2026
 
 ### Fixed
