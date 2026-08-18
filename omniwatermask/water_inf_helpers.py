@@ -11,7 +11,6 @@ import rasterio as rio
 import torch
 from numpy.typing import NDArray
 from omnicloudmask import predict_from_array
-from scipy.optimize import minimize_scalar
 
 from .target_builders import build_targets
 
@@ -59,43 +58,70 @@ def optimise_threshold(
     max_thresh: float = 0.3,
     num_steps: int = 40,
 ) -> tuple[torch.Tensor, float]:
-    """Get the optimal threshold to align the source tensor with the target tensor"""
+    """Get the optimal threshold to align the source tensor with the target tensor.
 
-    # Only ``source > threshold`` varies across the minimize_scalar evaluations,
-    # so the mask-dependent work (inverting the mask and zeroing the masked
-    # target) is hoisted out of the objective and computed once here instead of
-    # on every evaluation. Mirrors get_masked_iou's weighted=True branch.
+    The weighted IoU is evaluated for every candidate threshold in one pass
+    rather than by a sequential search. ``union = sum(max(bin, target))`` splits
+    into a constant part - the target summed where it is non-zero, which no
+    threshold changes - plus the count of included pixels where the target is
+    zero; ``intersection`` is the target summed over included pixels. Both are
+    suffix sums over a histogram of source values bucketed by how many
+    thresholds they exceed, so the whole curve costs one pass over the image and
+    one device sync, rather than a pass and a sync per candidate.
+    """
+    if num_steps < 2:
+        raise ValueError(f"num_steps must be at least 2, got {num_steps}")
+
     if mask is not None:
-        inv_mask = ~mask
         masked_target = torch.where(mask, torch.zeros_like(target), target)
+        keep = ~mask
     else:
-        inv_mask = None
         masked_target = target
+        keep = None
 
-    def objective(threshold: float) -> float:
-        source_bin = source > threshold
-        if inv_mask is not None:
-            source_bin = torch.logical_and(source_bin, inv_mask)
-        intersection = masked_target * source_bin
-        union = torch.maximum(source_bin, masked_target)
-        # Stack the two reductions so the device->host sync happens once.
-        intersection_sum, union_sum = torch.stack(
-            [intersection.sum(), union.sum()]
-        ).tolist()
-        iou_score = intersection_sum / union_sum if union_sum != 0 else 0
-        return -iou_score  # Negative because we want to maximize
+    flat_target = masked_target.reshape(-1)
+    flat_keep = keep.reshape(-1) if keep is not None else None
 
-    result = minimize_scalar(
-        objective,
-        bounds=(min_thresh, max_thresh),
-        method="bounded",
-        options={"xatol": 0.0001, "maxiter": num_steps},
+    target_weights = flat_target.float()
+    zero_hits = flat_target == 0
+    if flat_keep is not None:
+        target_weights = target_weights * flat_keep
+        zero_hits = zero_hits & flat_keep
+    zero_weights = zero_hits.float()
+
+    # Bucket each pixel by how many thresholds it exceeds. The grid is uniform,
+    # so this is arithmetic; torch.searchsorted gives the same indices but costs
+    # ~200x more on MPS over a few million pixels.
+    step = (max_thresh - min_thresh) / (num_steps - 1)
+    bucket = torch.ceil((source.reshape(-1).float() - min_thresh) / step)
+    # A NaN source pixel is excluded from every threshold, matching the
+    # ``source > threshold`` comparison this replaces; NDWI is 0/0 wherever a
+    # scene has no-data on both bands, so this is a real case rather than a
+    # theoretical one.
+    bucket = torch.nan_to_num(bucket, nan=0.0, posinf=float(num_steps), neginf=0.0)
+    bucket = bucket.clamp(0, num_steps).long()
+
+    # One host round-trip for the bound, reused by both histograms; the zero
+    # indicator is 0/1 so its bound is known without asking.
+    max_weight = float(target_weights.max().item()) if target_weights.numel() else 1.0
+    hist_target = _exact_histogram(bucket, target_weights, num_steps + 1, max_weight)
+    hist_zero = _exact_histogram(bucket, zero_weights, num_steps + 1, 1.0)
+
+    # A pixel in bucket j is included by every threshold with index < j, so the
+    # per-threshold totals are the reversed cumulative sums, dropping bucket 0.
+    intersection = np.flip(np.cumsum(np.flip(hist_target)))[1:]
+    extra_union = np.flip(np.cumsum(np.flip(hist_zero)))[1:]
+
+    union = hist_target.sum() + extra_union
+    iou = np.divide(
+        intersection, union, out=np.zeros_like(intersection), where=union > 0
     )
 
-    optimal_threshold = result.x
-    highest_accuracy = -result.fun
+    best_index = int(np.argmax(iou))
+    highest_accuracy = float(iou[best_index])
+    optimal_threshold = min_thresh + best_index * step
 
-    return source > optimal_threshold, float(highest_accuracy)
+    return source > optimal_threshold, highest_accuracy
 
 
 def _exact_histogram(
