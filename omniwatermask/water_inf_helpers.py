@@ -1,3 +1,4 @@
+import math
 import logging
 from pathlib import Path
 from queue import Queue
@@ -97,6 +98,48 @@ def optimise_threshold(
     return source > optimal_threshold, float(highest_accuracy)
 
 
+def _exact_histogram(
+    bucket: torch.Tensor, weights: torch.Tensor, num_bins: int, max_weight: float
+) -> NDArray[Any]:
+    """Sum ``weights`` into ``num_bins`` bins without losing counts to rounding.
+
+    A float32 accumulator saturates at 2**24: once a bin reaches 16,777,216,
+    adding 1.0 rounds straight back to itself. A full Sentinel-2 tile is 120.5M
+    pixels and most of them land in a handful of bins, so a plain float32
+    histogram silently stops counting and the IoU curve it feeds becomes
+    meaningless - it put 0.9% of a 74%-water scene under water. Integer
+    accumulation would be exact but scatter_add on int32 or int64 runs ~100x
+    slower on MPS (4.8s against 48ms for the same reduction), and float64 is
+    unavailable there.
+
+    Where the total cannot reach 2**24 the plain reduction is already exact and
+    is used as-is. Only above that is the work split into chunks small enough
+    that no accumulator can saturate, with the resulting (chunks, bins) table
+    reduced in float64 on the CPU. Patches take the first path and full scenes
+    the second, so the extra work lands only on the calls that need it.
+    """
+    n = bucket.numel()
+    headroom = max(1.0, math.ceil(max_weight))
+
+    if n * headroom <= (1 << 24):
+        table = torch.zeros(num_bins, device=bucket.device).scatter_add_(
+            0, bucket, weights
+        )
+        return table.cpu().double().numpy()
+
+    chunk = max(1, int((1 << 24) // headroom))
+    pad = (-n) % chunk
+    if pad:
+        bucket = torch.nn.functional.pad(bucket, (0, pad))
+        weights = torch.nn.functional.pad(weights, (0, pad))
+    n_chunks = (n + pad) // chunk
+
+    table = torch.zeros(n_chunks, num_bins, device=bucket.device).scatter_add_(
+        1, bucket.view(n_chunks, chunk), weights.view(n_chunks, chunk)
+    )
+    return table.cpu().double().numpy().sum(0)
+
+
 def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     """Get the intersection ratio of each cluster in the source
     with the target. Returns a tensor of the same shape as the
@@ -108,29 +151,39 @@ def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.
         source_np, connectivity=8
     )
 
-    labeled_torch = torch.from_numpy(labels).to(source.device)
+    labeled_torch = torch.from_numpy(labels).to(source.device).long()
 
-    intersection_ratios = torch.zeros_like(source, dtype=torch.float32)
+    # Every cluster's ratio is (sum of target over its pixels) / (its pixel
+    # count), so one scatter_add over the label image replaces the per-label
+    # Python loop this used to run - that sliced each cluster's bounding box
+    # and reduced it separately, paying a kernel launch per cluster.
+    # torch.bincount would express the same thing more directly but is
+    # pathologically slow on MPS (~100x slower than the loop it replaces),
+    # so the reduction is written as a scatter_add instead.
+    # Accumulated through _exact_histogram rather than a bare scatter_add: a
+    # single component can be enormous - the ocean in a coastal Sentinel-2 tile
+    # is one blob of ~89M pixels - and a float32 accumulator stops counting at
+    # 2**24. That understated such a cluster's ratio as ~0.19 instead of ~1.0,
+    # putting it under the cluster filter's threshold and deleting the ocean
+    # from the mask. The per-component torch.sum this replaced was a pairwise
+    # reduction and did not have that problem.
+    flat_target = target.reshape(-1).float()
+    max_weight = float(flat_target.max().item()) if flat_target.numel() else 1.0
+    cluster_sums = _exact_histogram(
+        labeled_torch.reshape(-1), flat_target, num_labels, max_weight
+    )
 
-    for label in range(1, num_labels):
-        min_col, min_row, width, height, _ = stats[label]
-        max_row, max_col = min_row + height, min_col + width
+    # cv2 already counts each component's pixels, so the denominator is read
+    # off the stats table rather than reduced a second time. The division stays
+    # in float64 on the host, where the large cluster sums are exact, and only
+    # the resulting ratios - all small - are carried back to the device.
+    cluster_sizes = stats[:, cv2.CC_STAT_AREA].astype(np.float64)
+    ratios_np = cluster_sums / np.maximum(cluster_sizes, 1.0)
+    # the background label is not a cluster
+    ratios_np[0] = 0.0
 
-        cluster_mask_slice = (
-            labeled_torch[min_row:max_row, min_col:max_col] == label
-        ).float()
-        pred_slice = target[min_row:max_row, min_col:max_col].float()
-
-        variable_cluster_sum = cluster_mask_slice.sum()
-        binary_cluster_sum = (cluster_mask_slice * pred_slice).sum()
-
-        intersecting_ratio = binary_cluster_sum / variable_cluster_sum
-
-        intersection_ratios[min_row:max_row, min_col:max_col] += (
-            cluster_mask_slice * intersecting_ratio
-        )
-
-    return intersection_ratios
+    ratios = torch.from_numpy(ratios_np.astype(np.float32)).to(source.device)
+    return ratios[labeled_torch]
 
 
 def optimise_by_threshold_and_overlap(
