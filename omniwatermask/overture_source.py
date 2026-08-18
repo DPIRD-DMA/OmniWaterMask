@@ -11,10 +11,12 @@ theme adds machine-learning-derived footprints on top of OSM.
 """
 
 import logging
+import threading
 import time
 from typing import Any, Optional
 
 import geopandas as gpd
+import pyarrow.fs as fs
 from overturemaps import core
 
 # Overture type names for each kind of feature OWM targets, chosen to match the
@@ -62,6 +64,169 @@ KEEP_COLUMNS = ["subtype", "class", "geometry"]
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 2.0
 
+# Overture publishes release discovery through a STAC catalogue, and
+# ``overturemaps`` resolves ``release=None`` through it on every call - before
+# it consults ``stac``, so ``stac=False`` does not avoid it. A single missing
+# object there took every uncached scene down in August 2026 while the Parquet
+# itself stayed readable on S3, so the release is resolved here instead, once
+# per process, with S3 as the fallback.
+_release_lock = threading.Lock()
+_resolved_release: Optional[str] = None
+
+# The bucket the releases live in. Listing it is the fallback for discovery,
+# and needs no credentials.
+RELEASE_BUCKET = "overturemaps-us-west-2"
+RELEASE_PREFIX = f"{RELEASE_BUCKET}/release"
+
+# A release directory can appear on S3 before it is fully uploaded, and a bare
+# listing carries no "published" signal the way the catalogue's ``latest`` key
+# does. Requiring the themes OWM actually reads keeps a half-written release
+# from being chosen over an older one that has them.
+KNOWN_REQUIRED_THEMES = frozenset(
+    {"theme=base", "theme=transportation", "theme=buildings"}
+)
+
+
+def _required_themes(type_theme_map: dict[str, str]) -> frozenset[str]:
+    """Derive required themes, tolerating an incomplete upstream mapping.
+
+    Derived from the types OWM asks for, so adding a kind to ``OVERTURE_TYPES``
+    cannot leave this behind. ``type_theme_map`` is public but not guaranteed,
+    so an incomplete one falls back to the themes those types map to today.
+    """
+    try:
+        return frozenset(
+            f"theme={type_theme_map[overture_type]}"
+            for overture_type in OVERTURE_TYPES.values()
+        )
+    except KeyError as e:
+        logging.warning(
+            "Could not derive required Overture themes from overturemaps (%s); "
+            "using the known theme set instead.",
+            e,
+        )
+        return KNOWN_REQUIRED_THEMES
+
+
+try:
+    _TYPE_THEME_MAP = core.type_theme_map
+except AttributeError as e:  # pragma: no cover - upstream dropped the mapping
+    logging.warning(
+        "Could not derive required Overture themes from overturemaps (%s); "
+        "using the known theme set instead.",
+        e,
+    )
+    REQUIRED_THEMES = KNOWN_REQUIRED_THEMES
+else:
+    REQUIRED_THEMES = _required_themes(_TYPE_THEME_MAP)
+
+
+def _release_sort_key(release: str) -> tuple[str, int]:
+    """Sort ``YYYY-MM-DD.sequence`` releases by numeric sequence."""
+    date, separator, sequence = release.rpartition(".")
+    if separator and sequence.isdigit():
+        return date, int(sequence)
+    return release, -1
+
+
+def _latest_release_from_s3() -> str:
+    """Return the newest release on S3 that carries every theme OWM reads.
+
+    Checks that the theme directories are present, which is not the same as
+    checking that their contents finished uploading - it is the cheap guard
+    available from a listing, not a completeness proof.
+    """
+    filesystem = fs.S3FileSystem(anonymous=True, region="us-west-2")
+    selector = fs.FileSelector(RELEASE_PREFIX, recursive=False)
+    releases = sorted(
+        (
+            info.base_name
+            for info in filesystem.get_file_info(selector)
+            if info.type == fs.FileType.Directory
+        ),
+        key=_release_sort_key,
+        reverse=True,
+    )
+
+    for release in releases:
+        themes = {
+            info.base_name
+            for info in filesystem.get_file_info(
+                fs.FileSelector(f"{RELEASE_PREFIX}/{release}", recursive=False)
+            )
+        }
+        if REQUIRED_THEMES <= themes:
+            return str(release)
+        logging.debug(f"Skipping incomplete Overture release {release}: {themes}")
+
+    raise RuntimeError(
+        f"No usable Overture release found under s3://{RELEASE_PREFIX}. "
+        f"Found {releases or 'none'}, none carrying {sorted(REQUIRED_THEMES)}."
+    )
+
+
+def _invalidate_release(release: str) -> None:
+    """Forget ``release`` so the next fetch rediscovers one.
+
+    Overture prunes releases roughly monthly. A long-lived process - a
+    notebook, a worker, a service - would otherwise keep asking for a release
+    that has since been deleted, and every later fetch would fail against it.
+
+    Only clears the cache if it still holds ``release``: a slow fetch failing
+    against a pruned release must not discard a newer one that another thread
+    has since resolved.
+    """
+    global _resolved_release
+
+    with _release_lock:
+        if _resolved_release == release:
+            _resolved_release = None
+
+
+def _resolve_release() -> str:
+    """Resolve the Overture release to read, once per process.
+
+    Tries Overture's own discovery first so a healthy catalogue still decides,
+    and falls back to the newest release on S3 carrying every theme OWM reads
+    when it is unavailable.
+    Deliberately not a pinned default: Overture keeps roughly two releases
+    (~60 days) and prunes the rest, so any hardcoded date stops resolving
+    within a couple of months.
+    """
+    global _resolved_release
+
+    with _release_lock:
+        if _resolved_release is not None:
+            return _resolved_release
+
+        try:
+            latest = core.get_latest_release()
+            if not latest:
+                # A reachable catalogue whose "latest" key is missing or null
+                # returns None rather than raising. Without this it would be
+                # str()-ed into the literal "None" and read as a release id.
+                raise RuntimeError("Overture's catalogue names no latest release")
+            release = str(latest)
+        except Exception as e:
+            logging.warning(
+                f"Overture release discovery is unavailable ({e}). Falling back "
+                f"to the newest release under s3://{RELEASE_PREFIX} carrying "
+                f"{sorted(REQUIRED_THEMES)}."
+            )
+            try:
+                release = _latest_release_from_s3()
+            except Exception as fallback_error:
+                raise RuntimeError(
+                    "Could not determine an Overture release: discovery failed "
+                    f"({e}) and the S3 fallback failed ({fallback_error}). If "
+                    "Overture is unavailable, OpenStreetMap is an alternative "
+                    'source - pass vector_source="osm" to query it instead.'
+                ) from fallback_error
+
+        logging.info(f"Using Overture release {release}")
+        _resolved_release = release
+        return release
+
 
 def get_overture_features(
     gdf_bounds_4326: gpd.GeoDataFrame,
@@ -107,6 +272,7 @@ def get_overture_features(
 def _fetch_once(
     overture_type: str,
     bbox: tuple[float, float, float, float],
+    release: str,
 ) -> Optional[gpd.GeoDataFrame]:
     """Run a single fetch attempt, or return None if Overture gave no reader.
 
@@ -114,10 +280,14 @@ def _fetch_once(
     of ``from_arrow`` rather than out of the reader call. Both live here so the
     retry above covers the whole request.
     """
-    # stac=True lets the client resolve the release and target only the
-    # relevant files via the STAC catalogue. Without it the whole dataset
-    # listing is opened, which measured ~5x slower per request.
-    reader = core.record_batch_reader(overture_type, bbox=bbox, stac=True)
+    # stac=True targets only the files intersecting the bbox via the STAC file
+    # index. Without it the whole dataset listing is opened, which measured
+    # ~5x slower per request. ``release`` is passed explicitly because the
+    # client otherwise resolves it per call through the catalogue root, which
+    # is a separate service from the per-release index this relies on.
+    reader = core.record_batch_reader(
+        overture_type, bbox=bbox, release=release, stac=True
+    )
     if reader is None:
         return None
     return gpd.GeoDataFrame.from_arrow(reader)
@@ -126,6 +296,7 @@ def _fetch_once(
 def _bbox_has_no_files(
     overture_type: str,
     bbox: tuple[float, float, float, float],
+    release: str,
 ) -> bool:
     """Report whether STAC finds no files at all intersecting ``bbox``.
 
@@ -141,7 +312,9 @@ def _bbox_has_no_files(
     if prepare_query is None:
         return False
     try:
-        return prepare_query(overture_type, bbox=bbox, stac=True) is None
+        return (
+            prepare_query(overture_type, bbox=bbox, release=release, stac=True) is None
+        )
     except Exception as e:
         logging.debug(f"Could not check STAC file coverage for {overture_type}: {e}")
         return False
@@ -158,17 +331,22 @@ def _fetch_with_retry(
     once the attempts are exhausted, so a persistent failure fails the build
     rather than passing an empty frame off as "no water here".
     """
+    # Resolved outside the loop: which release to read is a property of the run,
+    # not of this bbox, and a discovery failure is deterministic. Retrying it
+    # would spend the whole backoff schedule re-asking a question that has
+    # already been answered.
+    release = _resolve_release()
     last_error: Optional[Exception] = None
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            features = _fetch_once(overture_type, bbox)
+            features = _fetch_once(overture_type, bbox, release)
         except Exception as e:
             last_error = e
         else:
             if features is not None:
                 return features
-            if _bbox_has_no_files(overture_type, bbox):
+            if _bbox_has_no_files(overture_type, bbox, release):
                 logging.info(f"Overture has no {kind} files intersecting bbox: {bbox}")
                 return gpd.GeoDataFrame()
             last_error = RuntimeError(
@@ -184,9 +362,16 @@ def _fetch_with_retry(
             )
             time.sleep(delay)
 
+    # The release may have been pruned out from under a long-lived process, so
+    # drop it and let the next fetch resolve the current one.
+    _invalidate_release(release)
+
     raise RuntimeError(
         f"Overture {kind} fetch failed after {MAX_ATTEMPTS} attempts for bbox: "
-        f"{bbox}. This usually indicates a network or cloud storage error."
+        f"{bbox} (release {release}). This usually indicates a network or cloud "
+        "storage error. If Overture stays unavailable, OpenStreetMap covers the "
+        'same water and road data - pass vector_source="osm" to query it '
+        "through the Overpass API instead."
     ) from last_error
 
 

@@ -99,9 +99,29 @@ def get_osm_features(
         # "no features here". The parse path chains the JSONDecodeError that
         # caused it, so a cause means it was not an empty area.
         if e.__cause__ is not None:
-            raise
+            raise RuntimeError(
+                f"Overpass returned an unreadable response for tags: {tags} "
+                f"within bbox: {gpd_bbox}. Overpass rate-limits and times out on "
+                "large or dense areas; if that is what happened, Overture serves "
+                "the same underlying water and road data as static files from "
+                'cloud storage - pass vector_source="overture" to read it '
+                "instead."
+            ) from e
         logging.info(f"No features found with tags: {tags} within bbox: {gpd_bbox}")
         return gpd.GeoDataFrame()
+    except Exception as e:
+        # Deliberately broad: anything that is not an empty area must not be
+        # cached as "no features here". The cause is chained, so the real error
+        # survives - but it may be a malformed tags dict or an osmnx bug rather
+        # than Overpass being unavailable, so the alternative source is offered
+        # conditionally rather than asserted as the diagnosis.
+        raise RuntimeError(
+            f"OpenStreetMap fetch failed for tags: {tags} within bbox: "
+            f"{gpd_bbox}. See the chained exception for the cause. If Overpass "
+            "is unavailable or rate-limiting, Overture serves the same "
+            "underlying water and road data as static files from cloud storage "
+            '- pass vector_source="overture" to read it instead.'
+        ) from e
 
     features = features.drop(columns=["nodes", "ways"], errors="ignore")
     features = features.to_crs("EPSG:4326")

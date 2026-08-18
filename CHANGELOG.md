@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.2] - Aug 18, 2026
+
+### Fixed
+- Overture fetches no longer fail when Overture's release-discovery catalogue is unavailable. `overturemaps` resolves `release=None` through `https://stac.overturemaps.org/catalog.json` before it consults the `stac` flag, so `stac=False` does not avoid it, and it re-fetches that catalogue on every call for as long as the fetch keeps failing (it caches only a successful one) — and that object went missing in August 2026 while the GeoParquet itself stayed readable on S3, taking down every uncached scene. The release is now resolved once and reused for the rest of the process: from Overture's catalogue when it is reachable, otherwise from the newest release in Overture's S3 bucket that carries every theme OWM reads, so a release still missing themes is not chosen over an older one that has them. The resolved release is dropped if a fetch later fails against it, so a long-running process rediscovers one after Overture prunes it. No release is pinned, since Overture retains only ~2 releases (~60 days) and prunes the rest.
+- Failures that cannot improve on a retry — being unable to determine a release, in particular — are raised immediately rather than spending the full 3-attempt backoff on a deterministic error. The release is also resolved outside the retry loop, so it is no longer re-resolved once per bounding box.
+
+### Changed
+- Fetch failures now name the other vector source as an option: an Overture failure suggests `vector_source="osm"`, and an Overpass failure suggests `vector_source="overture"`. The two carry largely the same water and road data, so an outage in one is usually worth trying the other for.
+- An unreadable Overpass response is now raised as a `RuntimeError` carrying the original `InsufficientResponseError` as its cause, rather than propagating that error directly. It was already re-raised rather than swallowed; this only changes the type and adds the suggestion above.
+
 ## [0.6.1] - Aug 13, 2026
 
 ### Changed

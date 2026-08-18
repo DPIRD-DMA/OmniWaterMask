@@ -5,6 +5,17 @@ import rasterio as rio
 from rasterio.transform import from_bounds
 from shapely.geometry import box
 
+from omniwatermask import overture_source
+
+
+@pytest.fixture(autouse=True)
+def pin_overture_release(monkeypatch):
+    """Keep unit tests independent of Overture's live release discovery.
+
+    Release-resolution tests override this with their own autouse fixture.
+    """
+    monkeypatch.setattr(overture_source, "_resolved_release", "test-release")
+
 
 @pytest.fixture
 def tmp_dir(tmp_path):
