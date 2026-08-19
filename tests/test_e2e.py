@@ -14,6 +14,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 import rasterio as rio
+import rasterio.shutil
 import torch
 from rasterio.windows import Window
 from shapely.geometry import box
@@ -102,7 +103,7 @@ class TestResampleAndExportRoundTrip:
     """Resample -> export -> read preserves spatial properties."""
 
     def test_resample_then_export(self, naip_crop, tmp_path):
-        resampled = resample_input(naip_crop, resample_res=2, output_dir=tmp_path)
+        resampled = resample_input(naip_crop, resample_res=2)
 
         with rio.open(resampled) as src:
             assert src.width == 128
@@ -117,6 +118,8 @@ class TestResampleAndExportRoundTrip:
             assert dst.width == 128
             assert dst.height == 128
             assert dst.descriptions == ("water_mask",)
+
+        rasterio.shutil.delete(resampled)
 
 
 class TestVectorCacheRoundTrip:
@@ -245,11 +248,16 @@ class TestIntegrateWaterDetectionReal:
             debug_output=True,
         )
 
-        assert result.ndim == 3
+        # Debug layers are handed back one tensor per name, not stacked.
+        assert isinstance(result, list)
+        assert len(result) == len(layer_names)
         assert len(layer_names) > 2
         assert "Water predictions" in layer_names
         assert "NDWI binary" in layer_names
         assert "Model confidence" in layer_names
+        present = [layer for layer in result if layer is not None]
+        assert present
+        assert all(tuple(layer.shape) == (256, 256) for layer in present)
 
 
 class TestFullPipelineReal:

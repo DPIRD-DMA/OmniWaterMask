@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import rasterio.shutil
 import torch
 
 from omniwatermask.target_builders import TargetBuildError
@@ -422,3 +423,98 @@ class TestSkipsSceneWhenTargetsFail:
             )
 
         assert live_worker_threads() - before == set()
+
+
+class TestResampleIsVirtual:
+    """The resampled scene is a /vsimem VRT, never a raster on disk.
+
+    The pipeline used to hand the resample around as a written GeoTIFF, so the
+    scene path, the output name and the bands read all came from that file.
+    They now come from three separate places, and nothing on disk would catch
+    it if one of them drifted.
+    """
+
+    def _integrate_call(self, stub_pipeline):
+        assert stub_pipeline.call_args is not None
+        return stub_pipeline.call_args.kwargs
+
+    def test_reads_bands_at_the_resampled_size(
+        self, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        # The 100x100 10m fixture at 20m is 50x50.
+        assert self._integrate_call(stub_pipeline)["input_bands"].shape == (4, 50, 50)
+
+    def test_passes_the_vrt_as_the_scene(self, sample_geotiff, stub_pipeline, tmp_path):
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        assert self._integrate_call(stub_pipeline)["input_path"].startswith("/vsimem/")
+
+    def test_output_keeps_the_resample_suffix(
+        self, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        """The suffix used to come from the written file's stem."""
+        outputs = make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        assert outputs[0].name.startswith(f"{sample_geotiff.stem}_resample_20m_")
+        assert outputs[0].exists()
+
+    def test_writes_no_resampled_raster(self, sample_geotiff, stub_pipeline, tmp_path):
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        written = {p.name for p in tmp_path.iterdir()} | {
+            p.name for p in sample_geotiff.parent.iterdir()
+        }
+        assert not [n for n in written if n.endswith("_resample_20m.tif")]
+
+    def test_releases_the_vrt(self, sample_geotiff, stub_pipeline, tmp_path):
+        """/vsimem is process-global; a batch that never freed it would grow."""
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        vrt_path = self._integrate_call(stub_pipeline)["input_path"]
+        assert not rasterio.shutil.exists(vrt_path)
+
+    def test_releases_the_vrt_when_the_scene_fails(
+        self, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        """A scene skipped mid-run must not leak its VRT to the end of the batch."""
+        stub_pipeline.side_effect = TargetBuildError("no vectors")
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+            resample_res=20,
+        )
+        vrt_path = self._integrate_call(stub_pipeline)["input_path"]
+        assert not rasterio.shutil.exists(vrt_path)
+
+    def test_no_vrt_without_resampling(self, sample_geotiff, stub_pipeline, tmp_path):
+        make_water_mask_debug(
+            scene_paths=[sample_geotiff],
+            band_order=[1, 2, 3, 4],
+            output_dir=tmp_path,
+        )
+        kwargs = self._integrate_call(stub_pipeline)
+        assert kwargs["input_path"] == sample_geotiff
+        assert kwargs["input_bands"].shape == (4, 100, 100)

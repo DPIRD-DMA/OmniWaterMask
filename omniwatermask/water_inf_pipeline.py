@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 import rasterio as rio
+import rasterio.shutil
 import torch
 from omnicloudmask.model_utils import (
     default_device,
@@ -234,81 +235,97 @@ def make_water_mask_debug(
             output_dir_set = output_dir
 
         output_dir_set.mkdir(exist_ok=True, parents=True)
-        # Optionally resample the input image
+        # Optionally resample the input image. resample_input hands back a
+        # /vsimem VRT rather than a written raster, so scene_path opens like any
+        # other scene while the resampled pixels stay virtual. The name it would
+        # have had is rebuilt here, since there is no longer a file to take a
+        # stem from, and input_image keeps naming the real scene in the logs.
+        resample_vrt: Optional[str] = None
+        scene_path: Union[str, Path] = input_image
+        scene_stem = input_image.stem
         if resample_res is not None:
             logging.info(f"Resampling {input_image.name} to {resample_res}m")
-            input_image = resample_input(
+            resample_vrt = resample_input(
                 input_path=input_image,
                 resample_res=resample_res,
-                output_dir=output_dir_set,
             )
+            scene_path = resample_vrt
+            scene_stem = f"{input_image.stem}_resample_{resample_res}m"
 
-        debug_str = "_debug" if debug_output else ""
-        export_path = output_dir_set / (input_image.stem + f"_{version}{debug_str}.tif")
-
-        if export_path.exists() and not overwrite:
-            logging.info(f"Skipping {input_image.name} as it already exists")
-            output_paths.append(export_path)
-            p_bar.update(1)
-            p_bar.refresh()
-            continue
-
-        logging.info(f"Processing {input_image.name}")
-        with rio.open(input_image) as input_src:
-            input_bands = input_src.read(band_order)
-
-        logging.info(f"Predicting water mask for {input_image.name}")
         try:
-            water_predictions, layer_names, nodata_mask = (
-                integrate_water_detection_methods(
-                    input_bands=input_bands,
-                    input_path=input_image,
-                    debug_output=debug_output,
-                    inference_dtype=inference_dtype_torch,
-                    inference_device=inference_device_torch,
-                    inference_patch_size=inference_patch_size,
-                    inference_overlap_size=inference_overlap_size,
-                    batch_size=batch_size,
-                    use_osm_water=use_osm_water,
-                    aux_vector_sources=aux_vector_sources,
-                    aux_negative_vector_sources=aux_negative_vector_sources,
-                    mosaic_device=mosaic_device,
-                    use_ndwi=use_ndwi,
-                    use_model=use_model,
-                    use_osm_building_mask=use_osm_building,
-                    use_osm_roads_mask=use_osm_roads,
-                    vector_source=vector_source,
-                    include_ocean=include_ocean,
-                    cache_dir=cache_dir,
-                    use_cache=use_cache,
-                    optimise_model=optimise_model,
-                    no_data_value=no_data_value,
-                    models=models,
+            debug_str = "_debug" if debug_output else ""
+            export_path = output_dir_set / (scene_stem + f"_{version}{debug_str}.tif")
+
+            if export_path.exists() and not overwrite:
+                logging.info(f"Skipping {input_image.name} as it already exists")
+                output_paths.append(export_path)
+                p_bar.update(1)
+                p_bar.refresh()
+                continue
+
+            logging.info(f"Processing {input_image.name}")
+            with rio.open(scene_path) as input_src:
+                input_bands = input_src.read(band_order)
+
+            logging.info(f"Predicting water mask for {input_image.name}")
+            try:
+                water_predictions, layer_names, nodata_mask = (
+                    integrate_water_detection_methods(
+                        input_bands=input_bands,
+                        input_path=scene_path,
+                        debug_output=debug_output,
+                        inference_dtype=inference_dtype_torch,
+                        inference_device=inference_device_torch,
+                        inference_patch_size=inference_patch_size,
+                        inference_overlap_size=inference_overlap_size,
+                        batch_size=batch_size,
+                        use_osm_water=use_osm_water,
+                        aux_vector_sources=aux_vector_sources,
+                        aux_negative_vector_sources=aux_negative_vector_sources,
+                        mosaic_device=mosaic_device,
+                        use_ndwi=use_ndwi,
+                        use_model=use_model,
+                        use_osm_building_mask=use_osm_building,
+                        use_osm_roads_mask=use_osm_roads,
+                        vector_source=vector_source,
+                        include_ocean=include_ocean,
+                        cache_dir=cache_dir,
+                        use_cache=use_cache,
+                        optimise_model=optimise_model,
+                        no_data_value=no_data_value,
+                        models=models,
+                    )
                 )
-            )
-        except TargetBuildError:
-            # Export nothing rather than a mask built without its vector
-            # targets: it would look plausible, and the file on disk would make
-            # a re-run skip the scene. Leaving no file means the next run
-            # reprocesses it, so a transient outage costs a retry, not a batch.
-            logging.error(
-                f"Skipping {input_image.name}: its vector targets could not be "
-                f"built. See the traceback above. Re-run to retry this scene."
+            except TargetBuildError:
+                # Export nothing rather than a mask built without its vector
+                # targets: it would look plausible, and the file on disk would make
+                # a re-run skip the scene. Leaving no file means the next run
+                # reprocesses it, so a transient outage costs a retry, not a batch.
+                logging.error(
+                    f"Skipping {input_image.name}: its vector targets could not be "
+                    f"built. See the traceback above. Re-run to retry this scene."
+                )
+                p_bar.update(1)
+                p_bar.refresh()
+                continue
+
+            output_paths.append(export_path)
+            logging.info(f"Exporting {input_image.name} to {export_path}")
+            export_to_disk(
+                array=water_predictions,
+                export_path=export_path,
+                source_path=scene_path,
+                layer_names=layer_names,
+                nodata_mask=nodata_mask,
             )
             p_bar.update(1)
-            p_bar.refresh()
-            continue
+        finally:
+            # /vsimem is process-global and nothing reclaims it, so a batch that
+            # resamples would otherwise carry every scene's VRT to the end of
+            # the run. In a finally because the continues above skip past here.
+            if resample_vrt is not None:
+                rasterio.shutil.delete(resample_vrt)
 
-        output_paths.append(export_path)
-        logging.info(f"Exporting {input_image.name} to {export_path}")
-        export_to_disk(
-            array=water_predictions,
-            export_path=export_path,
-            source_path=input_image,
-            layer_names=layer_names,
-            nodata_mask=nodata_mask,
-        )
-        p_bar.update(1)
     p_bar.refresh()
     p_bar.close()
     if torch.cuda.is_available():
