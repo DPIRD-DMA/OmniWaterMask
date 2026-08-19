@@ -9,11 +9,15 @@ from omniwatermask import overture_source
 
 
 @pytest.fixture(autouse=True)
-def pin_overture_release(monkeypatch):
+def pin_overture_release(request, monkeypatch):
     """Keep unit tests independent of Overture's live release discovery.
 
-    Release-resolution tests override this with their own autouse fixture.
+    e2e tests fetch from the live release on purpose - pinning a fake one there
+    turns every Overture read into a 404. Release-resolution tests override this
+    with their own autouse fixture.
     """
+    if request.node.get_closest_marker("e2e"):
+        return
     monkeypatch.setattr(overture_source, "_resolved_release", "test-release")
 
 
