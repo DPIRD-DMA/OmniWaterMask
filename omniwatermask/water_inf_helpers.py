@@ -151,7 +151,12 @@ def _exact_histogram(
         table = torch.zeros(num_bins, device=bucket.device).scatter_add_(
             0, bucket, weights
         )
-        return table.cpu().double().numpy()
+        # Annotated rather than returned directly: numpy's stubs type .numpy()
+        # as Any on the versions resolved for older interpreters, and strict
+        # mypy rejects returning Any - while a cast would be flagged redundant
+        # on the newer numpy that types it properly.
+        single: NDArray[Any] = table.cpu().double().numpy()
+        return single
 
     chunk = max(1, int((1 << 24) // headroom))
     pad = (-n) % chunk
@@ -163,7 +168,8 @@ def _exact_histogram(
     table = torch.zeros(n_chunks, num_bins, device=bucket.device).scatter_add_(
         1, bucket.view(n_chunks, chunk), weights.view(n_chunks, chunk)
     )
-    return table.cpu().double().numpy().sum(0)
+    chunked: NDArray[Any] = table.cpu().double().numpy().sum(0)
+    return chunked
 
 
 def get_intersection_ratio(source: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
