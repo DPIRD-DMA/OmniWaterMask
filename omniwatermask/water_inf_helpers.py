@@ -308,6 +308,41 @@ def make_composite_output(
     return np.stack(output_layers), layer_names
 
 
+def _fuse_any(layers: list[torch.Tensor]) -> torch.Tensor:
+    """Combine layers with a logical OR, without stacking them first.
+
+    ``torch.stack(layers).sum(0) > 0`` materialises an (N, H, W) copy and then
+    a reduction whose dtype is promoted - bool sums to int64, eight bytes a
+    pixel. On a full Sentinel-2 tile that is 1.4 GB for four boolean layers
+    against 115 MB accumulating in place, for the same answer: every layer here
+    is non-negative, so "the sum is positive" and "any layer is set" agree.
+
+    Accumulating also sidesteps a quirk of the stacked form, which promotes the
+    whole stack to float when the list mixes dtypes - the no-data mask arrives
+    as the inference dtype while the vector targets are bool.
+    """
+    layer_iter = iter(layers)
+    fused = next(layer_iter).to(torch.bool, copy=True)
+    for layer in layer_iter:
+        fused |= layer.to(torch.bool)
+    return fused
+
+
+def _fuse_weighted(layers: list[torch.Tensor]) -> torch.Tensor:
+    """Add layers together as small integers, without stacking them first.
+
+    These targets are weighted - a pixel's value counts how many sources agree -
+    so unlike _fuse_any the sum has to be kept. uint8 is ample for that: the
+    lists here hold two or three layers, and the previous int64 result was eight
+    times wider than the counts it carried.
+    """
+    layer_iter = iter(layers)
+    fused = next(layer_iter).to(torch.uint8, copy=True)
+    for layer in layer_iter:
+        fused += layer.to(torch.uint8)
+    return fused
+
+
 def _collect_target(
     thread: Thread,
     result_queue: Queue[Any],
@@ -532,9 +567,7 @@ def integrate_water_detection_methods(
         negative_target.append(vector_negative_target)
 
     if len(negative_target) > 0:
-        negative_target_tensor: Optional[torch.Tensor] = (
-            torch.stack(negative_target).sum(0) > 0
-        )
+        negative_target_tensor: Optional[torch.Tensor] = _fuse_any(negative_target)
     else:
         negative_target_tensor = None
 
@@ -542,7 +575,7 @@ def integrate_water_detection_methods(
     if use_ndwi:
         logging.info("Optimising NDWI")
         if len(ndwi_target) > 0:
-            ndwi_target_tensor = torch.stack(ndwi_target).sum(0)
+            ndwi_target_tensor = _fuse_weighted(ndwi_target)
         else:
             ndwi_target_tensor = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
@@ -571,7 +604,7 @@ def integrate_water_detection_methods(
         normalised_accuracy = None
 
     if len(model_target) > 0:
-        model_target_tensor = torch.stack(model_target).sum(0)
+        model_target_tensor = _fuse_weighted(model_target)
     else:
         model_target_tensor = torch.zeros_like(ndwi_conf_tensor, dtype=torch.bool)
 
@@ -596,7 +629,7 @@ def integrate_water_detection_methods(
         model_conf_tensor = None
         model_binary_cleaned = None
 
-    combined_water_tensor = torch.stack(combined_water).sum(0) > 0
+    combined_water_tensor = _fuse_any(combined_water)
 
     if debug_output:
         logging.info("Exporting debug layers")
