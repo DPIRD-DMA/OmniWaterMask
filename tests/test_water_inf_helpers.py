@@ -154,29 +154,44 @@ class TestGetNDWI:
 
 
 class TestMakeCompositeOutput:
-    def test_stacks_layers(self):
+    def test_returns_layers_and_names_in_order(self):
         layers = {
             "layer1": torch.ones(10, 10),
             "layer2": torch.zeros(10, 10),
         }
         output, names = make_composite_output(layers)
-        assert output.shape == (2, 10, 10)
         assert names == ["layer1", "layer2"]
+        assert len(output) == 2
+        assert all(t.shape == (10, 10) for t in output)
 
-    def test_handles_none_values(self):
+    def test_passes_none_through_rather_than_materialising_zeros(self):
+        """An absent layer should cost nothing until export writes it."""
         layers = {
             "present": torch.ones(10, 10),
             "missing": None,
         }
         output, names = make_composite_output(layers)
-        assert output.shape == (2, 10, 10)
-        # The None layer should be zeros
-        assert np.all(output[1] == 0)
+        assert names == ["present", "missing"]
+        assert output[1] is None
 
-    def test_output_dtype_is_float32(self):
-        layers = {"a": torch.ones(5, 5, dtype=torch.int32)}
+    def test_leaves_layers_in_their_own_dtype(self):
+        """Promotion to float32 happens per band at export, not here.
+
+        Most debug layers are natively bool or uint8; promoting them all up
+        front is what used to cost 6.3 GB on a full tile, doubled again by the
+        stacked copy.
+        """
+        layers = {
+            "a": torch.ones(5, 5, dtype=torch.int32),
+            "b": torch.ones(5, 5).bool(),
+        }
         output, _ = make_composite_output(layers)
-        assert output.dtype == np.float32
+        assert output[0].dtype == torch.int32
+        assert output[1].dtype == torch.bool
+
+    def test_rejects_an_all_none_dict(self):
+        with pytest.raises(ValueError):
+            make_composite_output({"a": None, "b": None})
 
 
 class TestCollectTarget:

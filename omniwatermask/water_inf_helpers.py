@@ -15,6 +15,11 @@ from scipy.optimize import minimize_scalar
 from .target_builders import build_targets
 
 
+# What export_to_disk accepts: a stacked array for the single-band mask, or the
+# debug layers left as tensors so they can be promoted one at a time.
+ExportPayload = Union[NDArray[Any], list[Optional[torch.Tensor]]]
+
+
 def get_masked_iou(
     source: torch.Tensor,
     target: torch.Tensor,
@@ -287,25 +292,25 @@ def get_NDWI(
 
 def make_composite_output(
     input_dict: dict[str, Optional[torch.Tensor]],
-) -> tuple[NDArray[Any], list[str]]:
-    output_layers = []
-    layer_names = []
-    # Get the shape of the first non-None layer
-    shape = None
-    for value in input_dict.values():
-        if value is not None:
-            shape = value.shape
-            break
-    if shape is None:
+) -> tuple[list[Optional[torch.Tensor]], list[str]]:
+    """Collect the debug layers, leaving them in whatever form they arrived in.
+
+    Layers are handed on as tensors rather than promoted to float32 and stacked.
+    Most of them are natively bool or uint8 - a quarter the width - and stacking
+    doubles whatever the promoted set costs, because np.stack copies. On a full
+    Sentinel-2 tile that was 6.3 GB of float32 layers plus a 6.3 GB stacked copy
+    live at once, to write bands that are then serialised one at a time anyway.
+
+    ``export_to_disk`` promotes each layer as it writes it, so only one float32
+    band exists at a time. ``None`` is passed through rather than replaced with
+    zeros here, so an absent layer costs nothing until it is written.
+    """
+    if all(value is None for value in input_dict.values()):
         raise ValueError("make_composite_output requires at least one non-None layer")
     for key, value in input_dict.items():
-        #  if value is None, use a zero tensor to avoid missing layers
         if value is None:
-            logging.info(f"Layer {key} is None, setting to zero tensor")
-            value = torch.zeros(shape, dtype=torch.float32)
-        output_layers.append(value.float().numpy(force=True).astype(np.float32))
-        layer_names.append(key)
-    return np.stack(output_layers), layer_names
+            logging.info(f"Layer {key} is None, will be written as zeros")
+    return list(input_dict.values()), list(input_dict.keys())
 
 
 def _fuse_any(layers: list[torch.Tensor]) -> torch.Tensor:
@@ -413,7 +418,7 @@ def integrate_water_detection_methods(
     mosaic_device: Union[str, torch.device] = "cpu",
     no_data_value: int = 0,
     optimise_model: bool = True,
-) -> tuple[NDArray[Any], list[str], Optional[NDArray[Any]]]:
+) -> tuple[ExportPayload, list[str], Optional[NDArray[Any]]]:
     """Combine the NDWI, model predictions and vector targets.
 
     Returns the stacked output array, the per-band layer names, and an optional
@@ -633,6 +638,7 @@ def integrate_water_detection_methods(
 
     if debug_output:
         logging.info("Exporting debug layers")
+        final_output: ExportPayload
         final_output, layer_names = make_composite_output(
             {
                 "Water predictions": combined_water_tensor,
@@ -653,8 +659,8 @@ def integrate_water_detection_methods(
         )
         nodata_mask_np = None
     else:
-        final_output = combined_water_tensor.numpy(force=True).astype(np.uint8)
-        final_output = np.expand_dims(final_output, axis=0)
+        mask_band = combined_water_tensor.numpy(force=True).astype(np.uint8)
+        final_output = np.expand_dims(mask_band, axis=0)
         layer_names = ["Water predictions"]
         # validity mask: 1 where data is valid, 0 where no data. Written as a
         # GDAL dataset mask on export so QGIS treats nodata as transparent
