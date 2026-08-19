@@ -395,7 +395,7 @@ def _try_collect_target(
 
 def integrate_water_detection_methods(
     input_bands: NDArray[Any],
-    input_path: Path,
+    input_path: Union[str, Path],
     cache_dir: Path,
     inference_dtype: torch.dtype,
     inference_device: torch.device,
