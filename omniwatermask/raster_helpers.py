@@ -4,6 +4,7 @@ from typing import Any, Optional, Union
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
+import torch
 from numpy.typing import NDArray
 from rasterio import features
 from rasterio.transform import from_bounds
@@ -40,7 +41,7 @@ def resample_input(
 
 
 def export_to_disk(
-    array: NDArray[Any],
+    array: Union[NDArray[Any], list[Optional["torch.Tensor"]]],
     export_path: Path,
     source_path: Path,
     layer_names: list[str],
@@ -48,31 +49,81 @@ def export_to_disk(
 ) -> None:
     """Export the array to disk as a GeoTIFF.
 
+    ``array`` is either a stacked numpy array - the single-band water mask - or
+    a list of debug layers, which are written one band at a time. The list form
+    exists to keep peak memory down: the debug output is 14 layers, and holding
+    them all as float32 alongside a stacked copy costs 12.6 GB on a full
+    Sentinel-2 tile, to write bands that are serialised individually anyway.
+    Each layer is promoted as it is written and released immediately after, so
+    only one float32 band is live at a time.
+
     If ``nodata_mask`` is provided (1 = valid, 0 = no data) it is written as a
     GDAL dataset mask via ``dst.write_mask`` rather than as a regular band, so
     GIS software (e.g. QGIS) treats no-data pixels as transparent. The mask is
     embedded inside the GeoTIFF (``GDAL_TIFF_INTERNAL_MASK``) rather than written
     as a separate ``.tif.msk`` sidecar, so it travels with the file.
     """
+    layers: Optional[list[Optional["torch.Tensor"]]] = (
+        array if isinstance(array, list) else None
+    )
+    if layers is not None:
+        shape = _first_layer_shape(layers)
+        count, height, width = len(layers), shape[-2], shape[-1]
+        dtype: Any = "float32"
+    else:
+        assert not isinstance(array, list)
+        count, height, width = array.shape[0], array.shape[1], array.shape[2]
+        dtype = array.dtype
+
     with rio.open(source_path) as src:
         profile = {
-            "dtype": array.dtype,
-            "count": array.shape[0],
+            "dtype": dtype,
+            "count": count,
             "compress": "lzw",
             "nodata": None,
             "driver": "GTiff",
-            "height": array.shape[1],
-            "width": array.shape[2],
+            "height": height,
+            "width": width,
             "transform": src.transform,
             "crs": src.crs,
         }
+    if layers is not None:
+        # Writing band by band only lays out and compresses well with BAND
+        # interleave and tiles; under the default PIXEL interleave LZW has to
+        # decode and re-encode every strip once per band.
+        profile.update(interleave="band", tiled=True, blockxsize=512, blockysize=512)
 
     with rio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with rio.open(export_path, "w", **profile) as dst:
-            dst.write(array)
+            if layers is not None:
+                for index in range(count):
+                    band = _layer_as_float32(layers[index], height, width)
+                    # Drop the caller's reference as well as ours, so a layer
+                    # nothing else holds is freed before the next is promoted.
+                    layers[index] = None
+                    dst.write(band, index + 1)
+                    del band
+            else:
+                dst.write(array)
             dst.descriptions = layer_names
             if nodata_mask is not None:
                 dst.write_mask((nodata_mask * 255).astype("uint8"))
+
+
+def _first_layer_shape(layers: list[Optional["torch.Tensor"]]) -> tuple[int, ...]:
+    for layer in layers:
+        if layer is not None:
+            return tuple(layer.shape)
+    raise ValueError("export_to_disk was given no non-None layers")
+
+
+def _layer_as_float32(
+    layer: Optional["torch.Tensor"], height: int, width: int
+) -> NDArray[Any]:
+    """Promote one debug layer to the float32 band the GeoTIFF stores."""
+    if layer is None:
+        return np.zeros((height, width), dtype=np.float32)
+    return layer.float().numpy(force=True).astype(np.float32, copy=False)
 
 
 def rasterize_vector(

@@ -127,7 +127,10 @@ class TestIntegrateWaterDetectionMethods:
             use_model=True,
             debug_output=True,
         )
-        assert result.ndim == 3
+        # debug output is handed on as a list of layers, promoted per band at
+        # export time rather than stacked here
+        assert isinstance(result, list)
+        assert len(result) == len(layer_names)
         assert len(layer_names) > 2
         assert "Water predictions" in layer_names
         assert "NDWI binary" in layer_names
