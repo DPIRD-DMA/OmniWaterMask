@@ -16,6 +16,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 import rasterio as rio
+import rasterio.shutil
 import torch
 from rasterio.windows import Window
 from shapely.geometry import box
@@ -107,7 +108,7 @@ class TestResampleAndExportRoundTrip:
     """Resample -> export -> read preserves spatial properties."""
 
     def test_resample_then_export(self, naip_crop, tmp_path):
-        resampled = resample_input(naip_crop, resample_res=2, output_dir=tmp_path)
+        resampled = resample_input(naip_crop, resample_res=2)
 
         with rio.open(resampled) as src:
             assert src.width == 128
@@ -123,6 +124,8 @@ class TestResampleAndExportRoundTrip:
             assert dst.height == 128
             assert dst.descriptions == ("water_mask",)
 
+        rasterio.shutil.delete(resampled)
+
 
 class TestVectorCacheRoundTrip:
     """Full cache workflow: init -> add -> check -> view."""
@@ -136,16 +139,20 @@ class TestVectorCacheRoundTrip:
         paths = [Path("/some/raster.tif")]
         gdf = gpd.GeoDataFrame(geometry=[box(0.1, 0.1, 0.9, 0.9)], crs="EPSG:4326")
 
-        _, found = check_db(cache_dir, polygon, paths, water=True)
+        _, found = check_db(cache_dir, polygon, paths, water=True, crs="EPSG:32756")
         assert found is False
 
-        add_to_db(cache_dir, polygon, paths, gdf, water=True)
+        add_to_db(cache_dir, polygon, paths, gdf, water=True, crs="EPSG:32756")
 
-        result_gdf, found = check_db(cache_dir, polygon, paths, water=True)
+        result_gdf, found = check_db(
+            cache_dir, polygon, paths, water=True, crs="EPSG:32756"
+        )
         assert found is True
         assert len(result_gdf) == 1
 
-        _, found = check_db(cache_dir, polygon, paths, water=False, roads=True)
+        _, found = check_db(
+            cache_dir, polygon, paths, water=False, roads=True, crs="EPSG:32756"
+        )
         assert found is False
 
 
@@ -250,11 +257,16 @@ class TestIntegrateWaterDetectionReal:
             debug_output=True,
         )
 
-        assert result.ndim == 3
+        # Debug layers are handed back one tensor per name, not stacked.
+        assert isinstance(result, list)
+        assert len(result) == len(layer_names)
         assert len(layer_names) > 2
         assert "Water predictions" in layer_names
         assert "NDWI binary" in layer_names
         assert "Model confidence" in layer_names
+        present = [layer for layer in result if layer is not None]
+        assert present
+        assert all(tuple(layer.shape) == (256, 256) for layer in present)
 
 
 class TestFullPipelineReal:
@@ -687,9 +699,17 @@ class TestOvertureLiveFetch:
         initialize_db(cache_dir)
         polygon = box(*SYDNEY_HARBOUR_BBOX)
 
-        add_to_db(cache_dir, polygon, [], sydney_water, water=True, source="overture")
+        add_to_db(
+            cache_dir,
+            polygon,
+            [],
+            sydney_water,
+            water=True,
+            source="overture",
+            crs="EPSG:32756",
+        )
         restored, found = check_db(
-            cache_dir, polygon, [], water=True, source="overture"
+            cache_dir, polygon, [], water=True, source="overture", crs="EPSG:32756"
         )
 
         assert found is True
