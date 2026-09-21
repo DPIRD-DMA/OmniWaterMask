@@ -33,8 +33,12 @@ def download_file_from_hugging_face(destination: Path) -> None:
     """
     Downloads a file from Hugging Face using hf_hub_download.
 
-    Loads the resulting safetensors file and saves it as a PyTorch
-    model state for compatibility with the rest of the codebase.
+    Weights are published on the Hub as safetensors whatever the model
+    generation, so ``local_dir`` puts the download at ``destination``
+    directly and a safetensors-named entry needs nothing further. A v1
+    entry names a ``.pth``, which is what the Google Drive copy of that
+    generation is, so it is converted to keep one file name per entry
+    across both sources.
 
     Args:
         destination (Path): The local path where the file should
@@ -46,9 +50,11 @@ def download_file_from_hugging_face(destination: Path) -> None:
         filename=f"{file_name}.safetensors",
         force_download=True,
         cache_dir=destination.parent,
+        local_dir=destination.parent,
     )
-    model_state = load_file(safetensor_path)
-    torch.save(model_state, destination)
+    if destination.suffix == ".pth":
+        model_state = load_file(safetensor_path)
+        torch.save(model_state, destination)
 
 
 def download_file(file_id: str, destination: Path, source: str) -> None:

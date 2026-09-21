@@ -5,6 +5,7 @@ import pytest
 
 from omniwatermask.download_models import (
     download_file,
+    download_file_from_hugging_face,
     get_model_data_dir,
     get_models,
 )
@@ -83,3 +84,60 @@ class TestGetModels:
 
         get_models(model_dir=model_dir, source="hugging_face")
         assert mock_download.called
+
+
+class TestHuggingFaceDownloadShapes:
+    """The Hub always serves safetensors; the entry's own suffix decides the rest.
+
+    A v2+ entry names the safetensors itself, so the same published file backs
+    both the Hub and the Google Drive copy and nothing is converted. A v1 entry
+    names a ``.pth`` because that is what its Drive copy is, so the safetensors
+    has to be rewritten as a torch state to keep one file name per entry.
+    """
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_safetensors_entry_is_not_converted(
+        self, mock_hf, mock_load, mock_save, tmp_path
+    ):
+        dest = tmp_path / "PM_model_2.3.4_smp_convnextv2_nano_PT_state.safetensors"
+        mock_hf.return_value = str(dest)
+
+        download_file_from_hugging_face(dest)
+
+        # Asked the Hub for the entry's own name, and left the file alone.
+        assert mock_hf.call_args.kwargs["filename"] == (
+            "PM_model_2.3.4_smp_convnextv2_nano_PT_state.safetensors"
+        )
+        mock_load.assert_not_called()
+        mock_save.assert_not_called()
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_pth_entry_is_converted(self, mock_hf, mock_load, mock_save, tmp_path):
+        dest = tmp_path / "PM_model_1.5.38_convnextv2_base_PT.pth_weights.pth"
+        mock_hf.return_value = str(tmp_path / "downloaded.safetensors")
+        mock_load.return_value = {"weight": "tensor"}
+
+        download_file_from_hugging_face(dest)
+
+        assert mock_hf.call_args.kwargs["filename"] == (
+            "PM_model_1.5.38_convnextv2_base_PT.pth_weights.safetensors"
+        )
+        mock_save.assert_called_once_with({"weight": "tensor"}, dest)
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_download_lands_at_the_destination(
+        self, mock_hf, mock_load, mock_save, tmp_path
+    ):
+        """Without local_dir the file lands in a cache subdirectory instead."""
+        dest = tmp_path / "model_PT_state.safetensors"
+        mock_hf.return_value = str(dest)
+
+        download_file_from_hugging_face(dest)
+
+        assert mock_hf.call_args.kwargs["local_dir"] == tmp_path
