@@ -1,6 +1,6 @@
 from importlib import resources
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import gdown
 import pandas as pd
@@ -80,6 +80,19 @@ def _release_version(version: str) -> str:
     return version.split("+")[0].split(".dev")[0]
 
 
+def _model_index() -> "pd.DataFrame":
+    """Read the packaged model index, with versions as floats."""
+    with (resources.files("omniwatermask") / "model_download_links.csv").open() as f:
+        model_df = pd.read_csv(f)
+    model_df["version"] = model_df["version"].astype(float)
+    return model_df
+
+
+def get_latest_model_version() -> float:
+    """Highest model version in the packaged index."""
+    return float(_model_index()["version"].max())
+
+
 def get_model_data_dir() -> Path:
     """Get the user data directory for model files"""
     data_dir = Path(
@@ -96,7 +109,7 @@ def get_models(
     force_download: bool = False,
     model_dir: Union[str, Path, None] = None,
     source: str = "hugging_face",
-    model_version: float = 1.0,
+    model_version: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Downloads the model weights and saves them locally.
@@ -108,12 +121,17 @@ def get_models(
             model weights should be saved.
         source (str): The source from which to download. Currently
             only "google_drive" or "hugging_face" are supported.
+        model_version (Optional[float]): Which model version to fetch.
+            Defaults to the highest version in the packaged index.
+            Versions below 2 are fastai models and need the "legacy"
+            extra installed.
     """
 
-    with (resources.files("omniwatermask") / "model_download_links.csv").open() as f:
-        model_df = pd.read_csv(f)
+    model_df = _model_index()
 
-    model_df["version"] = model_df["version"].astype(float)
+    if model_version is None:
+        model_version = get_latest_model_version()
+
     available_versions = model_df["version"].unique()
     if model_version not in available_versions:
         raise ValueError(

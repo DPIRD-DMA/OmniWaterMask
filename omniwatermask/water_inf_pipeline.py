@@ -35,6 +35,7 @@ def collect_models(
     model_download_source: str,
     inference_device: torch.device,
     inference_dtype: torch.dtype,
+    model_version: Optional[float] = None,
 ) -> list[torch.nn.Module]:
     models = []
     if model_path != "":
@@ -54,7 +55,9 @@ def collect_models(
     # if no model path is provided, use the default model
     else:
         for model_details in get_models(
-            model_dir=destination_model_dir, source=model_download_source
+            model_dir=destination_model_dir,
+            source=model_download_source,
+            model_version=model_version,
         ):
             models.append(
                 load_model_from_weights(
@@ -94,6 +97,7 @@ def make_water_mask(
     cache_dir: Optional[Path] = None,
     destination_model_dir: Union[str, Path, None] = None,
     model_download_source: str = "hugging_face",
+    model_version: Optional[float] = None,
 ) -> list[Path]:
     if mosaic_device is None:
         mosaic_device = default_device()
@@ -129,6 +133,7 @@ def make_water_mask(
         cache_dir=cache_dir,
         destination_model_dir=destination_model_dir,
         model_download_source=model_download_source,
+        model_version=model_version,
     )
 
 
@@ -162,6 +167,7 @@ def make_water_mask_debug(
     cache_dir: Optional[Path] = None,
     destination_model_dir: Union[str, Path, None] = None,
     model_download_source: str = "hugging_face",
+    model_version: Optional[float] = None,
 ) -> list[Path]:
     if mosaic_device is None:
         mosaic_device = default_device()
@@ -215,6 +221,7 @@ def make_water_mask_debug(
         model_path=model_path,
         destination_model_dir=destination_model_dir,
         model_download_source=model_download_source,
+        model_version=model_version,
         inference_device=inference_device_torch,
         inference_dtype=inference_dtype_torch,
     )

@@ -62,6 +62,18 @@ conda install -c conda-forge omniwatermask
 pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 ```
 
+### Running model versions below 2 (optional)
+
+Model versions below 2 are fastai models, and fastai is not installed by
+default. The current model does not need it, so install this only to run an
+older version:
+
+```bash
+pip install omniwatermask[legacy]
+uv add omniwatermask --extra legacy
+conda install conda-forge::omniwatermask conda-forge::fastai
+```
+
 
 ## Usage
 
@@ -158,6 +170,8 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 -    `destination_model_dir`: Directory to save the model weights. Defaults to None
 
 -    `model_download_source`: Source from which to download the model weights. Defaults to "hugging_face", can also be "google_drive".
+
+-    `model_version`: Which published model version to use. Defaults to the newest in the packaged index. Versions below 2 are fastai models and need the `legacy` extra installed (see above).
 
 
 ## Examples
