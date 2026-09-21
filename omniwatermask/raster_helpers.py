@@ -1,49 +1,66 @@
 from pathlib import Path
 from typing import Any, Optional, Union
+from uuid import uuid4
 
 import geopandas as gpd
 import numpy as np
 import rasterio as rio
+import rasterio.shutil
 import torch
 from numpy.typing import NDArray
 from rasterio import features
+from rasterio.enums import Resampling
 from rasterio.transform import from_bounds
+from rasterio.vrt import WarpedVRT
 
 
-def resample_input(
-    input_path: Path, resample_res: Union[int, float], output_dir: Path
-) -> Path:
-    with rio.open(input_path) as src:
-        resample_path = output_dir / f"{input_path.stem}_resample_{resample_res}m.tif"
-        if resample_path.exists():
-            return resample_path
+def resample_input(input_path: Path, resample_res: Union[int, float]) -> str:
+    """Describe ``input_path`` at ``resample_res`` without materialising it.
 
+    Returns a ``/vsimem`` path to a VRT - a couple of KB of XML saying "I am a
+    raster of this size on this grid; fetch my pixels from that GeoTIFF". It
+    opens like any other raster, so every consumer downstream still just takes a
+    path, but the resampled scene only ever exists as the array whoever reads it
+    asks for.
+
+    This used to write a full resampled GeoTIFF next to the output: a complete
+    second copy of every band on disk, including the bands the caller never
+    reads, which was then decoded a second time on the way back in.
+
+    The path is only valid within this run, and only while the VRT lives - it
+    records an absolute path to its source, and nothing cleans up ``/vsimem``
+    for you. Callers own it, and must ``rasterio.shutil.delete`` it when done.
+    """
+    vrt_path = f"/vsimem/owm_resample_{uuid4().hex}.vrt"
+    # The VRT resolves its source when reopened, by which point this dataset is
+    # long closed and the working directory is no longer anyone's promise.
+    source = Path(input_path).resolve()
+
+    with rio.open(source) as src:
         scale_factor = src.res[0] / resample_res
         new_height = round(src.height * scale_factor)
         new_width = round(src.width * scale_factor)
 
         left, bottom, right, top = src.bounds
-        profile = src.profile.copy()
-        profile.update(
-            height=new_height,
-            width=new_width,
+        with WarpedVRT(
+            src,
+            crs=src.crs,
             transform=from_bounds(left, bottom, right, top, new_width, new_height),
-            alpha="unspecified",
-        )
-        data = src.read(out_shape=(src.count, new_height, new_width))
+            width=new_width,
+            height=new_height,
+            # Matches what the read-and-write version did: rasterio's default
+            # for a decimated read is nearest, so the pixels are unchanged.
+            resampling=Resampling.nearest,
+        ) as vrt:
+            rasterio.shutil.copy(vrt, vrt_path, driver="VRT")
 
-        with rio.open(resample_path, "w", **profile) as dst:
-            dst.write(data)
-            dst.descriptions = src.descriptions
-            dst.colorinterp = src.colorinterp
-
-    return resample_path
+    return vrt_path
 
 
 def export_to_disk(
     array: Union[NDArray[Any], list[Optional["torch.Tensor"]]],
     export_path: Path,
-    source_path: Path,
+    source_path: Union[str, Path],
     layer_names: list[str],
     nodata_mask: Optional[NDArray[Any]] = None,
 ) -> None:

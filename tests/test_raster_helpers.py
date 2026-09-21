@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 import numpy as np
 import torch
 import geopandas as gpd
 import rasterio as rio
+import rasterio.shutil
 from shapely.geometry import box
 
 from omniwatermask.raster_helpers import (
@@ -13,39 +16,71 @@ from omniwatermask.raster_helpers import (
 
 
 class TestResampleInput:
-    def test_resamples_to_lower_resolution(self, sample_geotiff, tmp_dir):
+    def test_resamples_to_lower_resolution(self, sample_geotiff):
         """Resampling to a coarser resolution should produce a smaller raster."""
-        result = resample_input(sample_geotiff, resample_res=20, output_dir=tmp_dir)
-        assert result.exists()
+        result = resample_input(sample_geotiff, resample_res=20)
         with rio.open(result) as src:
             # Original is 10m/px (1000m / 100px), resample to 20m → 50px
             assert src.width == 50
             assert src.height == 50
+        rasterio.shutil.delete(result)
 
-    def test_resamples_to_higher_resolution(self, sample_geotiff, tmp_dir):
+    def test_resamples_to_higher_resolution(self, sample_geotiff):
         """Resampling to a finer resolution should produce a larger raster."""
-        result = resample_input(sample_geotiff, resample_res=5, output_dir=tmp_dir)
+        result = resample_input(sample_geotiff, resample_res=5)
         with rio.open(result) as src:
             assert src.width == 200
             assert src.height == 200
+        rasterio.shutil.delete(result)
 
-    def test_returns_cached_if_exists(self, sample_geotiff, tmp_dir):
-        """If the resampled file already exists, it should return early."""
-        result1 = resample_input(sample_geotiff, resample_res=20, output_dir=tmp_dir)
-        mtime1 = result1.stat().st_mtime
-        result2 = resample_input(sample_geotiff, resample_res=20, output_dir=tmp_dir)
-        assert result1 == result2
-        assert result2.stat().st_mtime == mtime1  # file was not rewritten
+    def test_writes_nothing_to_disk(self, sample_geotiff):
+        """The resampled scene is a /vsimem VRT, not a raster next to the input."""
+        before = set(sample_geotiff.parent.iterdir())
+        result = resample_input(sample_geotiff, resample_res=20)
+        assert result.startswith("/vsimem/")
+        assert not Path(result).exists()
+        assert set(sample_geotiff.parent.iterdir()) == before
+        rasterio.shutil.delete(result)
 
-    def test_preserves_crs(self, sample_geotiff, tmp_dir):
-        result = resample_input(sample_geotiff, resample_res=20, output_dir=tmp_dir)
+    def test_each_call_gets_its_own_path(self, sample_geotiff):
+        """Two live resamples must not collide in the shared /vsimem namespace."""
+        first = resample_input(sample_geotiff, resample_res=20)
+        second = resample_input(sample_geotiff, resample_res=20)
+        assert first != second
+        rasterio.shutil.delete(first)
+        # Deleting one must leave the other readable.
+        with rio.open(second) as src:
+            assert src.width == 50
+        rasterio.shutil.delete(second)
+
+    def test_readable_after_source_dataset_closed(self, sample_geotiff):
+        """The VRT resolves its source itself, long after resample_input returns."""
+        result = resample_input(sample_geotiff, resample_res=20)
+        with rio.open(result) as src, rio.open(sample_geotiff) as orig:
+            expected = orig.read([1, 2], out_shape=(2, 50, 50))
+            assert np.array_equal(src.read([1, 2]), expected)
+        rasterio.shutil.delete(result)
+
+    def test_preserves_crs(self, sample_geotiff):
+        result = resample_input(sample_geotiff, resample_res=20)
         with rio.open(result) as src, rio.open(sample_geotiff) as orig:
             assert src.crs == orig.crs
+        rasterio.shutil.delete(result)
 
-    def test_preserves_band_count(self, sample_geotiff, tmp_dir):
-        result = resample_input(sample_geotiff, resample_res=20, output_dir=tmp_dir)
+    def test_preserves_band_count(self, sample_geotiff):
+        result = resample_input(sample_geotiff, resample_res=20)
         with rio.open(result) as src, rio.open(sample_geotiff) as orig:
             assert src.count == orig.count
+        rasterio.shutil.delete(result)
+
+    def test_resolves_relative_source_paths(self, sample_geotiff, monkeypatch):
+        """A VRT outlives the cwd it was built in, so the source must be absolute."""
+        monkeypatch.chdir(sample_geotiff.parent)
+        result = resample_input(Path(sample_geotiff.name), resample_res=20)
+        monkeypatch.chdir(Path(__file__).parent)
+        with rio.open(result) as src:
+            assert src.read(1).shape == (50, 50)
+        rasterio.shutil.delete(result)
 
 
 class TestExportToDisk:
