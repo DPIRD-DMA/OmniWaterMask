@@ -1,3 +1,4 @@
+import inspect
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -6,7 +7,11 @@ import pytest
 import torch
 
 from omniwatermask.target_builders import TargetBuildError
-from omniwatermask.water_inf_pipeline import collect_models, make_water_mask_debug
+from omniwatermask.water_inf_pipeline import (
+    collect_models,
+    make_water_mask,
+    make_water_mask_debug,
+)
 
 
 class TestCollectModels:
@@ -422,3 +427,76 @@ class TestSkipsSceneWhenTargetsFail:
             )
 
         assert live_worker_threads() - before == set()
+
+
+class TestInferenceDtypeDefault:
+    """The default must reach the measurement, and an explicit dtype must not.
+
+    ``inference_dtype`` is declared on both entry points and resolved in one
+    place, so a default left behind on either signature would quietly pin that
+    entry point to float32 while the other measured the device.
+    """
+
+    def test_both_entry_points_default_to_auto(self):
+        for entry_point in (make_water_mask, make_water_mask_debug):
+            default = (
+                inspect.signature(entry_point).parameters["inference_dtype"].default
+            )
+            assert default == "auto", entry_point.__name__
+
+    @pytest.mark.parametrize(
+        "entry_point",
+        [make_water_mask, make_water_mask_debug],
+        ids=lambda f: f.__name__,
+    )
+    def test_default_reaches_the_measurement(
+        self, entry_point, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        with patch(
+            "omniwatermask.water_inf_pipeline.resolve_inference_dtype",
+            return_value=torch.bfloat16,
+        ) as mock_resolve:
+            entry_point(
+                scene_paths=[sample_geotiff],
+                band_order=[1, 2, 3, 4],
+                output_dir=tmp_path,
+                cache_dir=tmp_path / "cache",
+            )
+        assert mock_resolve.call_args.args[0] == "auto"
+
+    def test_explicit_dtype_bypasses_the_measurement(
+        self, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        """An explicit dtype must be handed on untouched, not measured over."""
+        with patch(
+            "omniwatermask.inference_dtype.fastest_inference_dtype"
+        ) as mock_measure:
+            make_water_mask_debug(
+                scene_paths=[sample_geotiff],
+                band_order=[1, 2, 3, 4],
+                output_dir=tmp_path,
+                cache_dir=tmp_path / "cache",
+                inference_dtype=torch.float32,
+            )
+        mock_measure.assert_not_called()
+
+    def test_resolved_dtype_reaches_the_models(
+        self, sample_geotiff, stub_pipeline, tmp_path
+    ):
+        """Whatever the measurement returns is what the models are loaded in."""
+        with (
+            patch(
+                "omniwatermask.water_inf_pipeline.resolve_inference_dtype",
+                return_value=torch.bfloat16,
+            ),
+            patch(
+                "omniwatermask.water_inf_pipeline.collect_models", return_value=[]
+            ) as mock_collect,
+        ):
+            make_water_mask_debug(
+                scene_paths=[sample_geotiff],
+                band_order=[1, 2, 3, 4],
+                output_dir=tmp_path,
+                cache_dir=tmp_path / "cache",
+            )
+        assert mock_collect.call_args.kwargs["inference_dtype"] is torch.bfloat16
