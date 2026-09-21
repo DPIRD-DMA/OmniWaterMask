@@ -8,6 +8,8 @@ cached in the tests/data/ directory. Model weights are downloaded
 from HuggingFace and cached by platformdirs.
 """
 
+import hashlib
+import importlib.util
 from pathlib import Path
 
 import geopandas as gpd
@@ -37,6 +39,9 @@ from omniwatermask.water_inf_helpers import (
     get_NDWI,
     integrate_water_detection_methods,
 )
+from omnicloudmask.model_utils import load_model_from_weights
+
+from omniwatermask.download_models import _model_index, get_models
 from omniwatermask.water_inf_pipeline import collect_models
 
 
@@ -689,3 +694,86 @@ class TestOvertureLiveFetch:
 
         assert found is True
         assert len(restored) == len(sydney_water)
+
+
+class TestPublishedModelsLoad:
+    """Every published entry must download and build into a working model.
+
+    The index is data, not code: a wrong encoder name, a file published under
+    a name the downloader does not derive, or weights that do not match the
+    architecture all pass every offline test and fail at the first real run.
+    Only fetching the published file and building the model catches them, so
+    this is parametrized over the whole index rather than the current version.
+
+    ``tu-convnextv2_nano`` is the case in point — smp's own encoder list has
+    no convnextv2, and without the ``tu-`` prefix routing it through timm this
+    raises ``KeyError`` here while every mocked test still passes.
+    """
+
+    @staticmethod
+    def _index_rows():
+        index = _model_index()
+        return [
+            pytest.param(
+                float(row["version"]),
+                str(row["model_library"]),
+                id=f"v{float(row['version']):g}-{row['model_library']}",
+            )
+            for _, row in index.iterrows()
+        ]
+
+    @pytest.fixture(params=["hugging_face", "google_drive"])
+    def source(self, request):
+        return request.param
+
+    @pytest.mark.parametrize("version,library", _index_rows())
+    def test_downloads_and_builds(self, version, library, source, tmp_path):
+        if library == "fastai" and importlib.util.find_spec("fastai") is None:
+            pytest.skip("fastai model version; install the legacy extra to cover it")
+
+        details = get_models(
+            model_dir=tmp_path,
+            source=source,
+            model_version=version,
+            force_download=True,
+        )
+        assert details, f"version {version:g} selected no entries"
+
+        for model_details in details:
+            weights = Path(model_details["Path"])
+            assert weights.exists(), weights
+            assert weights.stat().st_size > 1024 * 1024, "weights look truncated"
+
+            model = load_model_from_weights(
+                model_name=model_details["timm_model_name"],
+                weights_path=weights,
+                model_library=model_details["model_library"],
+                device=torch.device("cpu"),
+                dtype=torch.float32,
+                in_chans=4,
+                n_out=2,
+            )
+            assert isinstance(model, torch.nn.Module)
+
+            # The weights must match the architecture the index names, which a
+            # successful build alone does not prove — a strict state_dict load
+            # is what does, and omnicloudmask has already done one by here.
+            model.eval()
+            with torch.no_grad():
+                out = model(torch.zeros(1, 4, 256, 256))
+            assert out.shape == (1, 2, 256, 256)
+
+    def test_both_sources_publish_the_same_weights(self, tmp_path):
+        """One published file backs both sources; a drifted copy is a silent bug."""
+        digests = {}
+        for source in ("hugging_face", "google_drive"):
+            details = get_models(
+                model_dir=tmp_path / source, source=source, force_download=True
+            )
+            digests[source] = {
+                Path(d["Path"]).name: hashlib.sha256(
+                    Path(d["Path"]).read_bytes()
+                ).hexdigest()
+                for d in details
+            }
+        assert digests["hugging_face"] == digests["google_drive"]
