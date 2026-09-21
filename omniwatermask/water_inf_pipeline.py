@@ -6,7 +6,6 @@ import rasterio as rio
 import torch
 from omnicloudmask.model_utils import (
     default_device,
-    get_torch_dtype,
     load_model,
     load_model_from_weights,
 )
@@ -18,6 +17,7 @@ except ImportError:
     __version__ = "0.0.0+unknown"
 
 from .download_models import get_models
+from .inference_dtype import resolve_inference_dtype
 from .raster_helpers import export_to_disk, resample_input
 from .target_builders import (
     OSM,
@@ -83,7 +83,7 @@ def make_water_mask(
     inference_device: Optional[Union[str, torch.device]] = None,
     aux_vector_sources: Optional[list[Path]] = None,
     aux_negative_vector_sources: Optional[list[Path]] = None,
-    inference_dtype: Union[torch.dtype, str] = torch.float32,
+    inference_dtype: Union[torch.dtype, str] = "auto",
     no_data_value: int = 0,
     inference_patch_size: int = 1000,
     inference_overlap_size: int = 300,
@@ -156,7 +156,7 @@ def make_water_mask_debug(
     aux_vector_sources: Optional[list[Path]] = None,
     aux_negative_vector_sources: Optional[list[Path]] = None,
     resample_res: Optional[Union[int, float]] = None,
-    inference_dtype: Union[torch.dtype, str] = torch.float32,
+    inference_dtype: Union[torch.dtype, str] = "auto",
     inference_device: Optional[Union[str, torch.device]] = None,
     inference_patch_size: int = 1000,
     inference_overlap_size: int = 300,
@@ -213,7 +213,7 @@ def make_water_mask_debug(
             "scene_paths must be a list of Paths (or strings) or a path (or string)"
         )
     #  Convert the inference device and dtype to torch types
-    inference_dtype_torch = get_torch_dtype(inference_dtype)
+    inference_dtype_torch = resolve_inference_dtype(inference_dtype, inference_device)
     inference_device_torch = torch.device(inference_device)
 
     # Load the models

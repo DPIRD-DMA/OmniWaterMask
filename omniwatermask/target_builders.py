@@ -156,8 +156,20 @@ def combine_vector_targets(
     if all_targets.empty:
         return None
 
-    # re-project in 3857 to buffer and then to raster crs
-    all_targets = gpd.GeoDataFrame(all_targets).to_crs("EPSG:3857")
+    # Buffering needs a projected CRS so the distance is in metres, and the
+    # raster's own CRS normally is one - Sentinel-2 is UTM. Reprojecting
+    # straight to it does in one pass what used to take two, a round trip out
+    # to EPSG:3857 and back, which cost 2.1 GB of the 2.7 GB this function
+    # spent on a Perth tile's 918k features.
+    #
+    # It also buffers by the distance actually asked for. EPSG:3857's scale
+    # factor is 1/cos(latitude), so buffering 5 m there lays down ~4.2 m on the
+    # ground at Perth, and a different amount at every other latitude. Only a
+    # geographic raster CRS still needs the detour.
+    raster_crs = CRS.from_user_input(raster_src.crs)
+    buffer_crs = raster_crs if raster_crs.is_projected else CRS.from_epsg(3857)
+
+    all_targets = gpd.GeoDataFrame(all_targets).to_crs(buffer_crs)
     if all_targets is None:
         return None
     # remove points
@@ -174,7 +186,8 @@ def combine_vector_targets(
 
     all_targets["geometry"] = all_targets.geometry.make_valid()
 
-    all_targets = gpd.GeoDataFrame(all_targets).to_crs(raster_src.crs)
+    if buffer_crs != raster_crs:
+        all_targets = gpd.GeoDataFrame(all_targets).to_crs(raster_crs)
 
     return gpd.GeoDataFrame(all_targets)
 

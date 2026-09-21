@@ -106,7 +106,7 @@ water_mask_path = make_water_mask(
     -   NVIDIA GPU
     -   Apple Silicon Mac
     -   Other PyTorch-compatible accelerators
--   Consider enabling "bf16" inference_dtype on compatible hardware - this typically results in faster processing speeds.
+-   `inference_dtype` defaults to `"auto"`, which times the inference device once and drops to a reduced-precision dtype only where that is measurably faster. Pass an explicit dtype (such as `"bf16"` or `torch.float32`) to override the measurement.
 -   If experiencing VRAM limitations even with batch_size=1, switching the 'mosaic_device' parameter to 'cpu' can help.
 -   Improve accuracy by providing known water body locations as 'aux_vector_sources' - simply pass a list of file paths pointing to your water polygon datasets.
 -   Reduce false positives by including vector data for common misidentification sources (buildings, roads) through the 'aux_negative_vector_sources' parameter.
@@ -145,7 +145,7 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 -    `aux_negative_vector_sources`: List of paths to vector data marking areas commonly misidentified as water
 
--    `inference_dtype`: Data type for inference operations. Defaults to torch.float32
+-    `inference_dtype`: Data type for inference operations. Defaults to "auto", which measures the inference device and picks the fastest dtype that is not slower than float32; pass a dtype or dtype string to set it explicitly
 
 -    `no_data_value`: Value indicating no-data regions in the input imagery. Defaults to 0
 
