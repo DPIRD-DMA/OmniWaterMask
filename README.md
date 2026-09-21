@@ -155,6 +155,8 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 -    `cache_dir`: Directory for storing cached vector data. Defaults to "OWM_cache" in current directory
 
+-    `prune_stale_cache(cache_dir)`: Reclaims the space old cache generations leave behind. A generation is a database and a parquet directory whose names carry a version, and a release that changes how vectors are stored bumps it so the old entries are ignored rather than migrated - but the files stay on disk, a full copy of the cache per bump. This deletes the generations below the current one, along with any parquet in the current one that no entry points at. Generations *above* the current one are left alone, since they belong to a newer install sharing the directory. It is deliberately manual: those files are the only copy an older install would still read, so pruning means a downgrade refetches.
+
 -    `destination_model_dir`: Directory to save the model weights. Defaults to None
 
 -    `model_download_source`: Source from which to download the model weights. Defaults to "hugging_face", can also be "google_drive".

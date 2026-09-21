@@ -8,6 +8,7 @@ from unittest.mock import patch
 import geopandas as gpd
 import pytest
 import torch
+from pyproj import CRS
 from shapely.geometry import LineString, Point, box
 
 from omniwatermask.target_builders import (
@@ -649,3 +650,100 @@ class TestCombineVectorTargetsBufferCrs:
         # a few metres expressed in degrees of latitude is small but non-zero
         minx, miny, maxx, maxy = out.total_bounds
         assert 0 < (maxy - miny) < 0.01
+
+
+class TestEmptyBuildIsCached:
+    """An empty result must be remembered, or it is paid for on every run.
+
+    A bbox with no roads or buildings in it - a remote river, an Arctic coast -
+    still costs a full scan to establish that, and the answer cannot change
+    between two runs of the same release. Leaving it uncached made those scenes
+    refetch for minutes each time, and they are also the scenes that go into
+    inference missing that target layer entirely.
+    """
+
+    @staticmethod
+    def _build(raster_src, cache_dir, **kwargs):
+        from omniwatermask.vector_cache import initialize_db
+
+        initialize_db(cache_dir)
+        return build_targets(
+            raster_src=raster_src,
+            aux_vector_sources=[],
+            device="cpu",
+            cache_dir=cache_dir,
+            osm_water=True,
+            use_cache=True,
+            **kwargs,
+        )
+
+    @patch("omniwatermask.target_builders.get_overture_features")
+    def test_empty_build_is_not_refetched(
+        self, mock_overture, sample_rasterio_src, cache_dir
+    ):
+        mock_overture.return_value = gpd.GeoDataFrame()
+
+        first = self._build(sample_rasterio_src, cache_dir)
+        second = self._build(sample_rasterio_src, cache_dir)
+
+        assert first is None and second is None
+        assert mock_overture.call_count == 1, "the empty build should be cached"
+
+    @patch("omniwatermask.target_builders.get_overture_features")
+    def test_empty_build_still_reports_nothing_to_build(
+        self, mock_overture, sample_rasterio_src, cache_dir
+    ):
+        """The cached hit must read back as None, not as an empty frame that
+        downstream would try to rasterize."""
+        mock_overture.return_value = gpd.GeoDataFrame()
+
+        self._build(sample_rasterio_src, cache_dir)
+        assert self._build(sample_rasterio_src, cache_dir) is None
+
+    @patch("omniwatermask.target_builders.get_overture_features")
+    def test_a_populated_build_elsewhere_is_unaffected(
+        self, mock_overture, sample_rasterio_src, cache_dir
+    ):
+        """Caching the empty answer must not shadow a different query."""
+        mock_overture.return_value = gpd.GeoDataFrame()
+        assert self._build(sample_rasterio_src, cache_dir) is None
+
+        mock_overture.return_value = gpd.GeoDataFrame(
+            geometry=[box(390200, 6460200, 390800, 6460800)], crs="EPSG:32650"
+        )
+        assert self._build(sample_rasterio_src, cache_dir, osm_roads=True) is not None
+
+
+class TestCacheKeyCarriesTheRasterCrs:
+    """Vectors are buffered in the raster's CRS and stored in it.
+
+    Nothing downstream reprojects them, so an entry is only reusable by a raster
+    in the same CRS. The bounding box in the key is WGS84 and does not imply
+    one, so the CRS has to be passed explicitly.
+    """
+
+    @patch("omniwatermask.target_builders.add_to_db")
+    @patch("omniwatermask.target_builders.check_db")
+    @patch("omniwatermask.target_builders.get_overture_features")
+    def test_the_raster_crs_is_passed_to_both_sides_of_the_cache(
+        self, mock_overture, mock_check, mock_add, sample_rasterio_src, cache_dir
+    ):
+        mock_check.return_value = (gpd.GeoDataFrame(), False)
+        mock_overture.return_value = gpd.GeoDataFrame(
+            geometry=[box(390200, 6460200, 390800, 6460800)], crs="EPSG:32650"
+        )
+
+        build_targets(
+            raster_src=sample_rasterio_src,
+            aux_vector_sources=[],
+            device="cpu",
+            cache_dir=cache_dir,
+            osm_water=True,
+            use_cache=True,
+        )
+
+        expected = CRS.from_user_input(sample_rasterio_src.crs).to_string()
+        assert mock_check.call_args.kwargs["crs"] == expected
+        assert mock_add.call_args.kwargs["crs"] == expected
+        # the lookup and the write must agree, or nothing is ever a hit
+        assert mock_check.call_args.kwargs["crs"] == mock_add.call_args.kwargs["crs"]

@@ -134,16 +134,20 @@ class TestVectorCacheRoundTrip:
         paths = [Path("/some/raster.tif")]
         gdf = gpd.GeoDataFrame(geometry=[box(0.1, 0.1, 0.9, 0.9)], crs="EPSG:4326")
 
-        _, found = check_db(cache_dir, polygon, paths, water=True)
+        _, found = check_db(cache_dir, polygon, paths, water=True, crs="EPSG:32756")
         assert found is False
 
-        add_to_db(cache_dir, polygon, paths, gdf, water=True)
+        add_to_db(cache_dir, polygon, paths, gdf, water=True, crs="EPSG:32756")
 
-        result_gdf, found = check_db(cache_dir, polygon, paths, water=True)
+        result_gdf, found = check_db(
+            cache_dir, polygon, paths, water=True, crs="EPSG:32756"
+        )
         assert found is True
         assert len(result_gdf) == 1
 
-        _, found = check_db(cache_dir, polygon, paths, water=False, roads=True)
+        _, found = check_db(
+            cache_dir, polygon, paths, water=False, roads=True, crs="EPSG:32756"
+        )
         assert found is False
 
 
@@ -690,9 +694,17 @@ class TestOvertureLiveFetch:
         initialize_db(cache_dir)
         polygon = box(*SYDNEY_HARBOUR_BBOX)
 
-        add_to_db(cache_dir, polygon, [], sydney_water, water=True, source="overture")
+        add_to_db(
+            cache_dir,
+            polygon,
+            [],
+            sydney_water,
+            water=True,
+            source="overture",
+            crs="EPSG:32756",
+        )
         restored, found = check_db(
-            cache_dir, polygon, [], water=True, source="overture"
+            cache_dir, polygon, [], water=True, source="overture", crs="EPSG:32756"
         )
 
         assert found is True
