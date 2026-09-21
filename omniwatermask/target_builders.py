@@ -277,6 +277,11 @@ def build_targets(
         bounds = gdf_bounds_4326.geometry.total_bounds
         polygon = box(bounds[0], bounds[1], bounds[2], bounds[3])
 
+        # Part of the cache key. combine_vector_targets buffers in this CRS and
+        # returns the result in it, so an entry is only reusable by a raster
+        # that shares it - the WGS84 bounding box above does not imply one.
+        raster_crs_key = CRS.from_user_input(raster_src.crs).to_string()
+
         combined_vectors = None
         if use_cache:
             combined_vectors, cache_found = check_db(
@@ -288,7 +293,13 @@ def build_targets(
                 buildings=osm_buildings,
                 source=vector_source,
                 ocean=include_ocean,
+                crs=raster_crs_key,
             )
+            # A cached "no features here" comes back as an empty frame. The rest
+            # of this function represents that as None, exactly as a fresh build
+            # that found nothing does, so normalise it here.
+            if cache_found and combined_vectors is not None and combined_vectors.empty:
+                combined_vectors = None
         else:
             cache_found = False
 
@@ -326,8 +337,10 @@ def build_targets(
             combined_vectors = combine_vector_targets(
                 vector_list=all_vectors, raster_src=raster_src
             )
-            #  add to cache if using it, vectors are not empty, and no cache found
-            if use_cache and combined_vectors is not None and not cache_found:
+            # Cache the build whether or not it found anything: an empty result
+            # is the expensive one to recompute, since the query has to scan the
+            # whole bbox before it can report that there is nothing in it.
+            if use_cache:
                 add_to_db(
                     cache_dir=cache_dir,
                     polygon=polygon,
@@ -338,6 +351,7 @@ def build_targets(
                     buildings=osm_buildings,
                     source=vector_source,
                     ocean=include_ocean,
+                    crs=raster_crs_key,
                 )
         if combined_vectors is None:
             if queue is not None:
