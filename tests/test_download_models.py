@@ -176,9 +176,15 @@ class TestModelVersionSelection:
         oldest = float(index["version"].min())
         expected = set(index[index["version"] == oldest]["file_name"])
 
-        result = get_models(
-            model_dir=tmp_path, source="hugging_face", model_version=oldest
-        )
+        # find_spec is pinned so the result does not depend on whether the
+        # machine running the tests has the legacy extra installed.
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            result = get_models(
+                model_dir=tmp_path, source="hugging_face", model_version=oldest
+            )
 
         assert {Path(r["Path"]).name for r in result} == expected
         assert result != []
@@ -188,11 +194,15 @@ class TestModelVersionSelection:
         """model_library decides which architecture the weights are built into."""
         index = _model_index()
         for _, row in index.iterrows():
-            result = get_models(
-                model_dir=tmp_path,
-                source="hugging_face",
-                model_version=float(row["version"]),
-            )
+            with patch(
+                "omniwatermask.download_models.importlib.util.find_spec",
+                return_value=object(),
+            ):
+                result = get_models(
+                    model_dir=tmp_path,
+                    source="hugging_face",
+                    model_version=float(row["version"]),
+                )
             entry = next(r for r in result if Path(r["Path"]).name == row["file_name"])
             assert entry["model_library"] == row["model_library"]
             assert entry["timm_model_name"] == row["timm_model_name"]
@@ -216,3 +226,82 @@ class TestPublishedIndex:
         index = _model_index()
         counts = index.groupby("version")["model_library"].nunique()
         assert (counts == 1).all(), "a version mixes model libraries"
+
+
+class TestLegacyModelWithoutFastai:
+    """A fastai entry must fail here, not inside omnicloudmask.
+
+    omnicloudmask raises its own ImportError when it builds the architecture,
+    but that is after the weights have been fetched and is worded in its
+    version numbering and install commands. Neither applies to this package.
+    """
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_raises_before_downloading(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            with pytest.raises(ImportError) as excinfo:
+                get_models(
+                    model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+                )
+
+        mock_download.assert_not_called()
+        message = str(excinfo.value)
+        assert "omniwatermask[legacy]" in message
+        assert "--extra legacy" in message
+        # This package's numbering, not omnicloudmask's "versions 1-3".
+        assert "versions 1-3" not in message
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_names_a_version_that_works_instead(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+        expected = {
+            f"{float(v):g}"
+            for v in index[index["model_library"] != "fastai"]["version"].unique()
+        }
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            with pytest.raises(ImportError) as excinfo:
+                get_models(
+                    model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+                )
+
+        message = str(excinfo.value)
+        for version in expected:
+            assert version in message
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_smp_entries_are_unaffected(self, mock_download, tmp_path):
+        """The check must not block the versions that never needed fastai."""
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            result = get_models(model_dir=tmp_path, source="hugging_face")
+        assert result != []
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_passes_when_fastai_is_present(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            result = get_models(
+                model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+            )
+        assert result != []

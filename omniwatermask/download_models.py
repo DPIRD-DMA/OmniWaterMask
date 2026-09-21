@@ -1,3 +1,4 @@
+import importlib.util
 from importlib import resources
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -105,6 +106,41 @@ def get_model_data_dir() -> Path:
     return data_dir
 
 
+def _require_model_library(model_library: str, model_version: float) -> None:
+    """Fail before downloading weights that cannot be built into a model.
+
+    omnicloudmask raises this itself, but only once it goes to construct the
+    architecture — after the download, and phrased in its own version
+    numbering and install commands, neither of which matches this package.
+    Checking here costs an importlib lookup and lets the failure name the
+    versions and commands a caller of this package can act on.
+    """
+    if model_library != "fastai" or importlib.util.find_spec("fastai") is not None:
+        return
+
+    index = _model_index()
+    without_fastai = sorted(
+        float(version)
+        for version in index[index["model_library"] != "fastai"]["version"].unique()
+    )
+    alternatives = (
+        "Model versions that do not need it: "
+        + ", ".join(f"{version:g}" for version in without_fastai)
+        + " (the newest is the default)."
+        if without_fastai
+        else "Every published model version needs it."
+    )
+
+    raise ImportError(
+        f"Model version {model_version:g} is a fastai model, and fastai is not "
+        f"installed. {alternatives}\n\n"
+        "To install it:\n"
+        "  pip install omniwatermask[legacy]\n"
+        "  uv add omniwatermask --extra legacy\n"
+        "  conda install conda-forge::omniwatermask conda-forge::fastai"
+    )
+
+
 def get_models(
     force_download: bool = False,
     model_dir: Union[str, Path, None] = None,
@@ -149,6 +185,8 @@ def get_models(
         model_dir = get_model_data_dir()
 
     for _, row in model_df.iterrows():
+        _require_model_library(str(row["model_library"]), model_version)
+
         file_id = str(row["google_drive_id"])
 
         model_dir.mkdir(exist_ok=True)
