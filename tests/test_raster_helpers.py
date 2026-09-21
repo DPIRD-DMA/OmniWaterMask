@@ -1,4 +1,6 @@
+import pytest
 import numpy as np
+import torch
 import geopandas as gpd
 import rasterio as rio
 from shapely.geometry import box
@@ -129,3 +131,90 @@ class TestRasterizeVector:
         gdf = gpd.GeoDataFrame(geometry=[full_poly], crs=sample_rasterio_src.crs)
         result = rasterize_vector(gdf, profile)
         assert result.sum() == 100 * 100
+
+
+class TestExportToDiskStreaming:
+    """The debug path hands over a list of layers instead of a stacked array."""
+
+    def test_writes_each_layer_as_its_own_band(self, sample_geotiff, tmp_dir):
+        layers = [
+            torch.full((100, 100), 3, dtype=torch.uint8),
+            torch.ones((100, 100), dtype=torch.bool),
+        ]
+        export_path = tmp_dir / "streamed.tif"
+        export_to_disk(
+            array=layers,
+            export_path=export_path,
+            source_path=sample_geotiff,
+            layer_names=["counts", "flags"],
+        )
+        with rio.open(export_path) as src:
+            assert src.count == 2
+            assert src.dtypes == ("float32", "float32")
+            assert src.descriptions == ("counts", "flags")
+            assert np.all(src.read(1) == 3.0)
+            assert np.all(src.read(2) == 1.0)
+
+    def test_releases_each_layer_as_it_is_written(self, sample_geotiff, tmp_dir):
+        """The memory contract: a written layer must not still be referenced.
+
+        Holding all 14 debug layers as float32 plus a stacked copy is what cost
+        12.6 GB on a full Sentinel-2 tile. Streaming only helps if each source
+        is actually dropped, which callers rely on.
+        """
+        layers = [torch.ones((50, 50)), torch.zeros((50, 50))]
+        export_to_disk(
+            array=layers,
+            export_path=tmp_dir / "released.tif",
+            source_path=sample_geotiff,
+            layer_names=["a", "b"],
+        )
+        assert layers == [None, None]
+
+    def test_none_layer_is_written_as_zeros(self, sample_geotiff, tmp_dir):
+        layers = [torch.ones((100, 100)), None]
+        export_path = tmp_dir / "with_none.tif"
+        export_to_disk(
+            array=layers,
+            export_path=export_path,
+            source_path=sample_geotiff,
+            layer_names=["present", "missing"],
+        )
+        with rio.open(export_path) as src:
+            assert np.all(src.read(2) == 0.0)
+
+    def test_uses_band_interleave_and_tiles(self, sample_geotiff, tmp_dir):
+        """Band-at-a-time writes only compress well with BAND interleave."""
+        export_path = tmp_dir / "layout.tif"
+        export_to_disk(
+            array=[torch.ones((100, 100)), torch.zeros((100, 100))],
+            export_path=export_path,
+            source_path=sample_geotiff,
+            layer_names=["a", "b"],
+        )
+        with rio.open(export_path) as src:
+            assert src.profile["tiled"] is True
+            assert src.interleaving.name.lower() == "band"
+
+    def test_all_none_is_rejected(self, sample_geotiff, tmp_dir):
+        with pytest.raises(ValueError):
+            export_to_disk(
+                array=[None, None],
+                export_path=tmp_dir / "empty.tif",
+                source_path=sample_geotiff,
+                layer_names=["a", "b"],
+            )
+
+    def test_stacked_array_path_is_unchanged(self, sample_geotiff, tmp_dir):
+        """The single-band mask still goes through as a numpy array."""
+        array = np.ones((1, 100, 100), dtype=np.uint8)
+        export_path = tmp_dir / "mask.tif"
+        export_to_disk(
+            array=array,
+            export_path=export_path,
+            source_path=sample_geotiff,
+            layer_names=["Water predictions"],
+        )
+        with rio.open(export_path) as src:
+            assert src.count == 1
+            assert src.dtypes == ("uint8",)

@@ -1,3 +1,6 @@
+from rasterio.transform import from_bounds
+import rasterio as rio
+import numpy as np
 import logging
 from queue import Queue
 from unittest.mock import patch
@@ -582,3 +585,67 @@ class TestBuildTargetsVectorCache:
         assert len(df) == 1
         assert df["source"].iloc[0] == "overture"
         assert bool(df["ocean"].iloc[0]) is True
+
+
+class TestCombineVectorTargetsBufferCrs:
+    """Lines are buffered in a projected CRS so the distance means metres."""
+
+    @staticmethod
+    def _raster(tmp_path, crs, transform, name):
+        path = tmp_path / name
+        with rio.open(
+            path,
+            "w",
+            driver="GTiff",
+            height=100,
+            width=100,
+            count=1,
+            dtype="uint8",
+            crs=crs,
+            transform=transform,
+        ) as dst:
+            dst.write(np.zeros((1, 100, 100), "uint8"))
+        return rio.open(path)
+
+    def test_projected_raster_buffers_by_a_true_five_metres(self, tmp_path):
+        """EPSG:3857 would lay down ~4.2 m here, its scale factor at -32 lat.
+
+        Buffering in the raster's own UTM avoids both that error and the
+        reprojection round trip it used to require.
+        """
+        src = self._raster(
+            tmp_path,
+            "EPSG:32750",
+            from_bounds(390000, 6460000, 391000, 6461000, 100, 100),
+            "utm.tif",
+        )
+        line = gpd.GeoDataFrame(
+            geometry=[LineString([(390200, 6460500), (390800, 6460500)])],
+            crs="EPSG:32750",
+        ).to_crs("EPSG:4326")
+
+        out = combine_vector_targets([line], src)
+        assert out.crs == src.crs
+        minx, miny, maxx, maxy = out.total_bounds
+        # a 5 m buffer either side of a horizontal line: 10 m tall
+        assert (maxy - miny) == pytest.approx(10.0, abs=0.2)
+
+    def test_geographic_raster_still_buffers_in_metres(self, tmp_path):
+        """A degrees-based raster CRS cannot buffer in metres, so it detours."""
+        src = self._raster(
+            tmp_path,
+            "EPSG:4326",
+            from_bounds(115.80, -32.00, 115.90, -31.90, 100, 100),
+            "geo.tif",
+        )
+        line = gpd.GeoDataFrame(
+            geometry=[LineString([(115.82, -31.95), (115.88, -31.95)])],
+            crs="EPSG:4326",
+        )
+
+        out = combine_vector_targets([line], src)
+        assert out.crs == src.crs
+        assert (out.geometry.type == "Polygon").all()
+        # a few metres expressed in degrees of latitude is small but non-zero
+        minx, miny, maxx, maxy = out.total_bounds
+        assert 0 < (maxy - miny) < 0.01
