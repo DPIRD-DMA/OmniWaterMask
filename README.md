@@ -13,11 +13,19 @@ OmniWaterMask is a Python library for high accuracy water segmentation in high t
 
 [Check out the paper here](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
 
-> **Note on model versions.** The paper describes **model version 1**. The
-> default is now **model version 2**, a different architecture trained on seven
-> datasets rather than two. To reproduce the published model, pass
-> `model_version=1` and install the `legacy` extra (see
-> [below](#running-model-versions-below-2-optional)).
+> ### Model version 2 is in beta
+>
+> Version 2 is a new model, trained on seven datasets rather than two. It is the
+> default from `0.7.0b1`, which is a prerelease, so a normal install still gives
+> you version 1. To try it:
+>
+> ```bash
+> uv add omniwatermask==0.7.0b1
+> ```
+>
+> The paper describes version 1. To reproduce the published model, pass
+> `model_version=1` and install the `legacy` extra, which is described
+> [below](#running-model-versions-below-2-optional).
 
 
 ## Features
@@ -117,6 +125,14 @@ Output classes:
 -   0 = non-water
 -   1 = water
 
+## Examples
+
+Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/OmniWaterMask/tree/main/examples) directory:
+
+-   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb). Water segmentation on NAIP aerial imagery from HuggingFace
+-   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb). Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
+-   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb). Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
+
 ## Usage tips
 
 -   OWM needs an internet connection, because it downloads vector data.
@@ -214,14 +230,6 @@ deleted = prune_stale_cache("OWM_cache")
 
 It is deliberately manual rather than automatic: those files are the only copy
 an older install would still read, so pruning means a downgrade refetches.
-
-## Examples
-
-Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/OmniWaterMask/tree/main/examples) directory:
-
--   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb). Water segmentation on NAIP aerial imagery from HuggingFace
--   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb). Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
--   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb). Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
 
 ## Changelog
 
