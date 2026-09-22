@@ -289,10 +289,10 @@ Model version 2 is trained on seven:
 
 -   [S1S2-Water](https://github.com/MWieland/s1s2_water) — Sentinel-2 scenes with hand-checked water masks
 -   [FLAIR #1](https://ignf.github.io/FLAIR/) — French national 0.2 m aerial imagery with land-cover labels
--   GLH-Water — global 0.3 m satellite imagery with surface-water masks
+-   [GLH-Water](https://jack-bo1220.github.io/project/GLH-water.html) — global 0.3 m very-high-resolution satellite imagery with surface-water masks
 -   [SNOWED](https://zenodo.org/records/8112715) — Sentinel-2 sub-scenes labelled from NOAA shoreline survey data
 -   [CAID](https://zenodo.org/records/16461280) — aerial imagery with water segmentation masks
--   Chesapeake Land Cover — NAIP imagery with 1 m land cover over six US states
+-   [Chesapeake Land Cover](https://lila.science/datasets/chesapeakelandcover) — NAIP imagery with 1 m land cover over six US states, labelled by the Chesapeake Conservancy
 -   [EnviroAtlas](https://zenodo.org/records/5778193) — NAIP aerial imagery with EPA meter-scale land cover
 
 Model version 1, the model described in the paper, is trained on S1S2-Water and FLAIR #1.
