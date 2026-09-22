@@ -39,3 +39,41 @@ jobs:
 
       - name: Test
         run: uv run pytest tests/ -x -q  # e2e/inference tests excluded via addopts
+
+  default-install:
+    name: Default install (no extras)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The bounds of the supported range. 3.14 is where a missing spaCy wheel
+        # broke installs, and it is the extra - not this job - that still pulls
+        # spaCy in, so this is what proves the default install is clear of it.
+        python-version: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # full history so setuptools-scm can read tags
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - uses: astral-sh/setup-uv@v8.0.0
+        with:
+          cache-suffix: default-${{ matrix.python-version }}
+
+      # No --all-extras: this is what `pip install omniwatermask` gives you.
+      - run: uv sync --dev
+
+      - name: Assert the legacy tree is absent
+        run: |
+          uv run python -c "
+          import importlib.util as u
+          for name in ('fastai', 'spacy'):
+              if u.find_spec(name) is not None:
+                  raise SystemExit(name + ' is present in a default install')
+          "
+
+      # The fastai model tests skip here, which is the behaviour being checked.
+      - run: uv run pytest tests/ -x -q
