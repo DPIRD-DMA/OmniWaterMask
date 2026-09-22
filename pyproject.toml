@@ -25,20 +25,13 @@ dependencies = [
     "gdown>=5.1.0",
     "rasterio>=1.3",
     "timm>=0.9",
+    "segmentation-models-pytorch>=0.5.0", # floor set by omnicloudmask; the default model is an smp U-Net on a timm-universal encoder
     "torch>=2.3.0",
     "tqdm>=4.0",
     "platformdirs>=4.0.0",
     "packaging>=20.9",
-    "fastai>=2.7",
-    # spaCy 3.8.14 and 3.8.15 publish neither a cp314 wheel nor an sdist, so on
-    # Python 3.14 there is nothing for the resolver to install; 3.8.13 and
-    # earlier ship both. Scoped to 3.14 so other interpreters, where these
-    # versions install fine, are not held back, and expressed as exclusions so a
-    # later release that restores cp314 artifacts is picked up automatically.
-    # This is purely about what PyPI carries, so distributions that build from
-    # source — the conda-forge recipe — should not mirror it.
-    "spacy!=3.8.14,!=3.8.15; python_version >= '3.14'",
 ]
+
 license = "MIT"
 license-files = ["LICENSE"]
 readme = {file = "README.md", content-type = "text/markdown"}
@@ -71,6 +64,24 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.12.2",
     "s2mosaic>=0.3.2",
+]
+
+[project.optional-dependencies]
+# Model versions below 2 are fastai DynamicUnet models, so building one needs
+# fastai. Version 2 onward are segmentation-models-pytorch, which omnicloudmask
+# requires unconditionally, so a default install carries nothing extra to run
+# the current model and this is only needed to run an older one.
+legacy = [
+    "fastai>=2.7",
+    # fastai hard-requires spacy<4, and spaCy 3.8.14 and 3.8.15 publish neither
+    # a cp314 wheel nor an sdist, so on Python 3.14 there is nothing for the
+    # resolver to install; 3.8.13 and earlier ship both. Scoped to 3.14 so other
+    # interpreters, where these versions install fine, are not held back, and
+    # expressed as exclusions so a later release that restores cp314 artifacts is
+    # picked up automatically. This is purely about what PyPI carries, so
+    # distributions that build from source — the conda-forge recipe — should not
+    # mirror it. It travels with fastai: nothing else here pulls spaCy in.
+    "spacy!=3.8.14,!=3.8.15; python_version >= '3.14'",
 ]
 
 [project.urls]

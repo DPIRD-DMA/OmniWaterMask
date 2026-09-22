@@ -1,6 +1,7 @@
+import importlib.util
 from importlib import resources
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 import gdown
 import pandas as pd
@@ -33,8 +34,12 @@ def download_file_from_hugging_face(destination: Path) -> None:
     """
     Downloads a file from Hugging Face using hf_hub_download.
 
-    Loads the resulting safetensors file and saves it as a PyTorch
-    model state for compatibility with the rest of the codebase.
+    Weights are published on the Hub as safetensors whatever the model
+    generation, so ``local_dir`` puts the download at ``destination``
+    directly and a safetensors-named entry needs nothing further. A v1
+    entry names a ``.pth``, which is what the Google Drive copy of that
+    generation is, so it is converted to keep one file name per entry
+    across both sources.
 
     Args:
         destination (Path): The local path where the file should
@@ -46,9 +51,11 @@ def download_file_from_hugging_face(destination: Path) -> None:
         filename=f"{file_name}.safetensors",
         force_download=True,
         cache_dir=destination.parent,
+        local_dir=destination.parent,
     )
-    model_state = load_file(safetensor_path)
-    torch.save(model_state, destination)
+    if destination.suffix == ".pth":
+        model_state = load_file(safetensor_path)
+        torch.save(model_state, destination)
 
 
 def download_file(file_id: str, destination: Path, source: str) -> None:
@@ -74,6 +81,19 @@ def _release_version(version: str) -> str:
     return version.split("+")[0].split(".dev")[0]
 
 
+def _model_index() -> "pd.DataFrame":
+    """Read the packaged model index, with versions as floats."""
+    with (resources.files("omniwatermask") / "model_download_links.csv").open() as f:
+        model_df = pd.read_csv(f)
+    model_df["version"] = model_df["version"].astype(float)
+    return model_df
+
+
+def get_latest_model_version() -> float:
+    """Highest model version in the packaged index."""
+    return float(_model_index()["version"].max())
+
+
 def get_model_data_dir() -> Path:
     """Get the user data directory for model files"""
     data_dir = Path(
@@ -86,11 +106,46 @@ def get_model_data_dir() -> Path:
     return data_dir
 
 
+def _require_model_library(model_library: str, model_version: float) -> None:
+    """Fail before downloading weights that cannot be built into a model.
+
+    omnicloudmask raises this itself, but only once it goes to construct the
+    architecture — after the download, and phrased in its own version
+    numbering and install commands, neither of which matches this package.
+    Checking here costs an importlib lookup and lets the failure name the
+    versions and commands a caller of this package can act on.
+    """
+    if model_library != "fastai" or importlib.util.find_spec("fastai") is not None:
+        return
+
+    index = _model_index()
+    without_fastai = sorted(
+        float(version)
+        for version in index[index["model_library"] != "fastai"]["version"].unique()
+    )
+    alternatives = (
+        "Model versions that do not need it: "
+        + ", ".join(f"{version:g}" for version in without_fastai)
+        + " (the newest is the default)."
+        if without_fastai
+        else "Every published model version needs it."
+    )
+
+    raise ImportError(
+        f"Model version {model_version:g} is a fastai model, and fastai is not "
+        f"installed. {alternatives}\n\n"
+        "To install it:\n"
+        "  pip install omniwatermask[legacy]\n"
+        "  uv add omniwatermask --extra legacy\n"
+        "  conda install conda-forge::omniwatermask conda-forge::fastai"
+    )
+
+
 def get_models(
     force_download: bool = False,
     model_dir: Union[str, Path, None] = None,
     source: str = "hugging_face",
-    model_version: float = 1.0,
+    model_version: Optional[float] = None,
 ) -> list[dict[str, Any]]:
     """
     Downloads the model weights and saves them locally.
@@ -102,12 +157,17 @@ def get_models(
             model weights should be saved.
         source (str): The source from which to download. Currently
             only "google_drive" or "hugging_face" are supported.
+        model_version (Optional[float]): Which model version to fetch.
+            Defaults to the highest version in the packaged index.
+            Versions below 2 are fastai models and need the "legacy"
+            extra installed.
     """
 
-    with (resources.files("omniwatermask") / "model_download_links.csv").open() as f:
-        model_df = pd.read_csv(f)
+    model_df = _model_index()
 
-    model_df["version"] = model_df["version"].astype(float)
+    if model_version is None:
+        model_version = get_latest_model_version()
+
     available_versions = model_df["version"].unique()
     if model_version not in available_versions:
         raise ValueError(
@@ -125,6 +185,8 @@ def get_models(
         model_dir = get_model_data_dir()
 
     for _, row in model_df.iterrows():
+        _require_model_library(str(row["model_library"]), model_version)
+
         file_id = str(row["google_drive_id"])
 
         model_dir.mkdir(exist_ok=True)

@@ -4,7 +4,10 @@ from unittest.mock import patch
 import pytest
 
 from omniwatermask.download_models import (
+    _model_index,
     download_file,
+    download_file_from_hugging_face,
+    get_latest_model_version,
     get_model_data_dir,
     get_models,
 )
@@ -41,14 +44,15 @@ class TestDownloadFile:
 class TestGetModels:
     @patch("omniwatermask.download_models.download_file")
     def test_returns_model_paths(self, mock_download, tmp_path):
-        # Pre-create a fake model file large enough to skip re-download
+        # Pre-create a fake model file large enough to skip re-download. Named
+        # from the index so a new model version does not turn this into a test
+        # that an absent file is not downloaded.
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        model_name = (
-            "PM_model_1.5.38_s1s2_water_flair_convnextv2_base_PT.pth_weights.pth"
-        )
-        fake_model = model_dir / model_name
-        fake_model.write_bytes(b"x" * (2 * 1024 * 1024))  # 2MB
+        index = _model_index()
+        latest = index[index["version"] == get_latest_model_version()]
+        for model_name in latest["file_name"]:
+            (model_dir / str(model_name)).write_bytes(b"x" * (2 * 1024 * 1024))  # 2MB
 
         result = get_models(model_dir=model_dir, source="hugging_face")
         assert isinstance(result, list)
@@ -83,3 +87,221 @@ class TestGetModels:
 
         get_models(model_dir=model_dir, source="hugging_face")
         assert mock_download.called
+
+
+class TestHuggingFaceDownloadShapes:
+    """The Hub always serves safetensors; the entry's own suffix decides the rest.
+
+    A v2+ entry names the safetensors itself, so the same published file backs
+    both the Hub and the Google Drive copy and nothing is converted. A v1 entry
+    names a ``.pth`` because that is what its Drive copy is, so the safetensors
+    has to be rewritten as a torch state to keep one file name per entry.
+    """
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_safetensors_entry_is_not_converted(
+        self, mock_hf, mock_load, mock_save, tmp_path
+    ):
+        dest = tmp_path / "PM_model_2.3.4_smp_convnextv2_nano_PT_state.safetensors"
+        mock_hf.return_value = str(dest)
+
+        download_file_from_hugging_face(dest)
+
+        # Asked the Hub for the entry's own name, and left the file alone.
+        assert mock_hf.call_args.kwargs["filename"] == (
+            "PM_model_2.3.4_smp_convnextv2_nano_PT_state.safetensors"
+        )
+        mock_load.assert_not_called()
+        mock_save.assert_not_called()
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_pth_entry_is_converted(self, mock_hf, mock_load, mock_save, tmp_path):
+        dest = tmp_path / "PM_model_1.5.38_convnextv2_base_PT.pth_weights.pth"
+        mock_hf.return_value = str(tmp_path / "downloaded.safetensors")
+        mock_load.return_value = {"weight": "tensor"}
+
+        download_file_from_hugging_face(dest)
+
+        assert mock_hf.call_args.kwargs["filename"] == (
+            "PM_model_1.5.38_convnextv2_base_PT.pth_weights.safetensors"
+        )
+        mock_save.assert_called_once_with({"weight": "tensor"}, dest)
+
+    @patch("omniwatermask.download_models.torch.save")
+    @patch("omniwatermask.download_models.load_file")
+    @patch("omniwatermask.download_models.hf_hub_download")
+    def test_download_lands_at_the_destination(
+        self, mock_hf, mock_load, mock_save, tmp_path
+    ):
+        """Without local_dir the file lands in a cache subdirectory instead."""
+        dest = tmp_path / "model_PT_state.safetensors"
+        mock_hf.return_value = str(dest)
+
+        download_file_from_hugging_face(dest)
+
+        assert mock_hf.call_args.kwargs["local_dir"] == tmp_path
+
+
+class TestModelVersionSelection:
+    """Which model an unpinned caller gets, and how an old one is asked for.
+
+    The index carries more than one generation, and they are not
+    interchangeable: version 1 is a fastai model and needs the legacy extra,
+    version 2 onward are smp. A caller that pins nothing must get the newest,
+    or a released model would sit unused until someone passed a number.
+    """
+
+    def test_latest_is_the_highest_version_in_the_index(self):
+        index = _model_index()
+        assert get_latest_model_version() == index["version"].max()
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_unpinned_resolves_to_the_latest(self, mock_download, tmp_path):
+        index = _model_index()
+        expected = set(
+            index[index["version"] == get_latest_model_version()]["file_name"]
+        )
+
+        result = get_models(model_dir=tmp_path, source="hugging_face")
+
+        assert {Path(r["Path"]).name for r in result} == expected
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_an_older_version_can_be_pinned(self, mock_download, tmp_path):
+        index = _model_index()
+        oldest = float(index["version"].min())
+        expected = set(index[index["version"] == oldest]["file_name"])
+
+        # find_spec is pinned so the result does not depend on whether the
+        # machine running the tests has the legacy extra installed.
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            result = get_models(
+                model_dir=tmp_path, source="hugging_face", model_version=oldest
+            )
+
+        assert {Path(r["Path"]).name for r in result} == expected
+        assert result != []
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_library_travels_with_the_entry(self, mock_download, tmp_path):
+        """model_library decides which architecture the weights are built into."""
+        index = _model_index()
+        for _, row in index.iterrows():
+            with patch(
+                "omniwatermask.download_models.importlib.util.find_spec",
+                return_value=object(),
+            ):
+                result = get_models(
+                    model_dir=tmp_path,
+                    source="hugging_face",
+                    model_version=float(row["version"]),
+                )
+            entry = next(r for r in result if Path(r["Path"]).name == row["file_name"])
+            assert entry["model_library"] == row["model_library"]
+            assert entry["timm_model_name"] == row["timm_model_name"]
+
+
+class TestPublishedIndex:
+    """The index is what a released install reads; a bad row fails at download."""
+
+    def test_smp_entries_use_a_timm_universal_encoder(self):
+        """smp's own encoder list has no convnextv2; tu- routes it through timm."""
+        index = _model_index()
+        for _, row in index[index["model_library"] == "smp"].iterrows():
+            assert str(row["timm_model_name"]).startswith("tu-"), row["file_name"]
+
+    def test_every_entry_names_a_loadable_suffix(self):
+        index = _model_index()
+        for name in index["file_name"]:
+            assert Path(str(name)).suffix in {".pth", ".safetensors"}, name
+
+    def test_versions_are_unique_per_generation(self):
+        index = _model_index()
+        counts = index.groupby("version")["model_library"].nunique()
+        assert (counts == 1).all(), "a version mixes model libraries"
+
+
+class TestLegacyModelWithoutFastai:
+    """A fastai entry must fail here, not inside omnicloudmask.
+
+    omnicloudmask raises its own ImportError when it builds the architecture,
+    but that is after the weights have been fetched and is worded in its
+    version numbering and install commands. Neither applies to this package.
+    """
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_raises_before_downloading(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            with pytest.raises(ImportError) as excinfo:
+                get_models(
+                    model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+                )
+
+        mock_download.assert_not_called()
+        message = str(excinfo.value)
+        assert "omniwatermask[legacy]" in message
+        assert "--extra legacy" in message
+        # This package's numbering, not omnicloudmask's "versions 1-3".
+        assert "versions 1-3" not in message
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_names_a_version_that_works_instead(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+        expected = {
+            f"{float(v):g}"
+            for v in index[index["model_library"] != "fastai"]["version"].unique()
+        }
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            with pytest.raises(ImportError) as excinfo:
+                get_models(
+                    model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+                )
+
+        message = str(excinfo.value)
+        for version in expected:
+            assert version in message
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_smp_entries_are_unaffected(self, mock_download, tmp_path):
+        """The check must not block the versions that never needed fastai."""
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec", return_value=None
+        ):
+            result = get_models(model_dir=tmp_path, source="hugging_face")
+        assert result != []
+
+    @patch("omniwatermask.download_models.download_file")
+    def test_passes_when_fastai_is_present(self, mock_download, tmp_path):
+        index = _model_index()
+        fastai_versions = index[index["model_library"] == "fastai"]["version"]
+        if fastai_versions.empty:
+            pytest.skip("no fastai entries in the index")
+
+        with patch(
+            "omniwatermask.download_models.importlib.util.find_spec",
+            return_value=object(),
+        ):
+            result = get_models(
+                model_dir=tmp_path, model_version=float(fastai_versions.iloc[0])
+            )
+        assert result != []
