@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.7.0b1] - Sep 22, 2026
 
 ### Added
 - A model version 2: `PM_model_2.3.4_7ds_smp_convnextv2_nano`, a segmentation-models-pytorch U-Net on a `convnextv2_nano` encoder, published as safetensors on both the Hugging Face repo and Google Drive. `make_water_mask` and `make_water_mask_debug` take a `model_version` argument, defaulting to the newest version in the packaged index rather than to a fixed number, so a published model is used without anyone passing one and an older generation stays reachable by pinning it.
