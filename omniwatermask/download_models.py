@@ -134,10 +134,10 @@ def _require_model_library(model_library: str, model_version: float) -> None:
     raise ImportError(
         f"Model version {model_version:g} is a fastai model, and fastai is not "
         f"installed. {alternatives}\n\n"
-        "To install it:\n"
-        "  pip install omniwatermask[legacy]\n"
-        "  uv add omniwatermask --extra legacy\n"
-        "  conda install conda-forge::omniwatermask conda-forge::fastai"
+        "To install it, use whichever matches how this package was installed:\n"
+        '  pip:   pip install "omniwatermask[legacy]"\n'
+        "  uv:    uv add omniwatermask --extra legacy\n"
+        "  conda: conda install conda-forge::omniwatermask conda-forge::fastai"
     )
 
 

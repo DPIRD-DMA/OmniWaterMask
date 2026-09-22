@@ -72,11 +72,24 @@ pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 
 Model versions below 2 are fastai models, and fastai is not installed by
 default. The current model does not need it, so install this only to run an
-older version:
+older version. These are alternatives — use whichever matches how you installed
+OmniWaterMask.
+
+With pip:
 
 ```bash
-pip install omniwatermask[legacy]
+pip install "omniwatermask[legacy]"
+```
+
+With uv:
+
+```bash
 uv add omniwatermask --extra legacy
+```
+
+With conda:
+
+```bash
 conda install conda-forge::omniwatermask conda-forge::fastai
 ```
 
