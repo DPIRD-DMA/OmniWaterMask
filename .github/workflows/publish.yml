@@ -69,7 +69,20 @@ jobs:
           name: python-package-distributions
           path: dist/
 
+      - id: kind
+        # Exactly three numeric components is a final release; a tag carrying a
+        # suffix (b1, rc1, ...) is not. The tag filter above already allows both,
+        # and deriving it here means a prerelease is not published as "Latest"
+        # just because someone forgot to flip a flag - nor the reverse.
+        run: |
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ steps.kind.outputs.prerelease }}
