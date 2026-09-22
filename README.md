@@ -36,11 +36,11 @@ OmniWaterMask is a Python library for high accuracy water segmentation in high t
 [Colab_Button]: https://img.shields.io/badge/Try%20in%20Colab-grey?style=for-the-badge&logo=google-colab
 
 ## How it works
-OmniWaterMask integrates a sensor agnostic deep learning segmentation model with NDWI and vector datasets to detect water bodies within remote sensing products.
+OmniWaterMask combines a sensor agnostic deep learning segmentation model with NDWI and vector data to find water in satellite and aerial imagery.
 
 ## Installation
 
-To use OmniWaterMask, you need to install the package. It is recommended to use an environment manager such as conda or uv to avoid conflicts with other packages.
+Install it with an environment manager such as conda or uv, to keep it clear of your other packages.
 
 ### Install the package using pip
 
@@ -72,7 +72,7 @@ pip install git+https://github.com/DPIRD-DMA/OmniWaterMask.git
 
 Model versions below 2 are fastai models, and fastai is not installed by
 default. The current model does not need it, so install this only to run an
-older version. These are alternatives — use whichever matches how you installed
+older version. These are alternatives. Use whichever matches how you installed
 OmniWaterMask.
 
 With pip:
@@ -96,7 +96,7 @@ conda install conda-forge::omniwatermask conda-forge::fastai
 
 ## Usage
 
-To predict a water mask for a list of scenes simply pass a list of geotiff files to the make_water_mask function along with the band order for the Red, Green, Blue and NIR bands. Predictions are saved to disk along side the input as geotiffs, a list of prediction file paths is returned:
+Pass a list of geotiff files to `make_water_mask` with the band order for the Red, Green, Blue and NIR bands. It writes each prediction to disk as a geotiff alongside its input, and returns the list of prediction paths.
 
 ```python
 from pathlib import Path
@@ -111,35 +111,36 @@ water_mask_path = make_water_mask(
 )
 ```
 ## Output
-- Output classes are:
-- 0 = Non-water
-- 1 = water
+
+Output classes:
+
+-   0 = non-water
+-   1 = water
 
 ## Usage tips
 
--   OWM requires an active internet connection to function properly, as it needs to download vector data.
--   Which Overture release to read is resolved once and reused for the rest of the process, from Overture's release catalogue when it is reachable and otherwise from the newest release in Overture's S3 bucket that carries every theme OWM reads. It is rediscovered if a fetch later fails against it, so a long-running process picks up a new release after Overture prunes the old one. Releases are not pinned: Overture retains roughly two releases (~60 days) and prunes the rest, so a hardcoded release stops resolving within a couple of months. This also means an old run cannot be reproduced by pinning a release — the local vector cache is what makes a target set reproducible.
--   Vector data comes from [Overture Maps](https://overturemaps.org) by default. If you would rather query OpenStreetMap live through the Overpass API, set `vector_source="osm"`. Overture serves static monthly GeoParquet releases from cloud storage, so it avoids the rate limits and timeouts Overpass returns on large or dense bounding boxes. The underlying data is largely the same — Overture's water and road layers are derived from OSM — though its building footprints add machine-learning-derived data beyond OSM. Note that Overture files a few landforms (`cape`, `blowhole`, `shoal`) under its water theme; OWM filters these out so they are not treated as water.
--   If a scene's vector data cannot be fetched, that scene is skipped rather than processed without it — a mask built without its vector targets looks plausible but is quietly worse. Overture fetches retry transient failures first (3 attempts, 2s then 4s apart); failures that will not improve on a retry, such as being unable to determine which Overture release to read, are raised immediately instead of consuming the backoff. A skipped scene is logged at ERROR, is left out of the returned list of output paths, and has no file written, so re-running the same call reprocesses it while the rest of the batch is untouched. Because the two sources are largely interchangeable, an outage in one is worth trying the other for, and the error messages say so.
--   Hardware acceleration is strongly recommended:
+-   OWM needs an internet connection, because it downloads vector data.
+-   Which Overture release to read is resolved once and reused for the rest of the process, from Overture's release catalogue when it is reachable and otherwise from the newest release in Overture's S3 bucket that carries every theme OWM reads. It is rediscovered if a fetch later fails against it, so a long-running process picks up a new release after Overture prunes the old one. Releases are not pinned. Overture retains roughly two releases (~60 days) and prunes the rest, so a hardcoded release stops resolving within a couple of months. This also means an old run cannot be reproduced by pinning a release. The local vector cache is what makes a target set reproducible.
+-   Vector data comes from [Overture Maps](https://overturemaps.org) by default. If you would rather query OpenStreetMap live through the Overpass API, set `vector_source="osm"`. Overture serves static monthly GeoParquet releases from cloud storage, so it avoids the rate limits and timeouts Overpass returns on large or dense bounding boxes. The underlying data is largely the same, since Overture's water and road layers are derived from OSM, though its building footprints add machine-learning-derived data beyond OSM. Note that Overture files a few landforms (`cape`, `blowhole`, `shoal`) under its water theme; OWM filters these out so they are not treated as water.
+-   If a scene's vector data cannot be fetched, that scene is skipped rather than processed without it. A mask built without its vector targets looks plausible but is quietly worse. Overture fetches retry transient failures first (3 attempts, 2s then 4s apart); failures that will not improve on a retry, such as being unable to determine which Overture release to read, are raised immediately instead of consuming the backoff. A skipped scene is logged at ERROR, is left out of the returned list of output paths, and has no file written, so re-running the same call reprocesses it while the rest of the batch is untouched. Because the two sources are largely interchangeable, an outage in one is worth trying the other for, and the error messages say so.
+-   Use hardware acceleration if you have it:
     -   NVIDIA GPU
     -   Apple Silicon Mac
     -   Other PyTorch-compatible accelerators
 -   `inference_dtype` defaults to `"auto"`, which times the inference device once and drops to a reduced-precision dtype only where that is measurably faster. Pass an explicit dtype (such as `"bf16"` or `torch.float32`) to override the measurement.
--   If experiencing VRAM limitations even with batch_size=1, switching the 'mosaic_device' parameter to 'cpu' can help.
--   Improve accuracy by providing known water body locations as 'aux_vector_sources' - simply pass a list of file paths pointing to your water polygon datasets.
--   Reduce false positives by including vector data for common misidentification sources (buildings, roads) through the 'aux_negative_vector_sources' parameter.
-
--   When working with scenes containing no-data regions, explicitly set the 'no_data_value' parameter to ensure proper handling of these areas.
+-   If you run out of VRAM even at `batch_size=1`, set `mosaic_device` to `"cpu"`.
+-   Improve accuracy by passing known water body locations to `aux_vector_sources`, as a list of paths to your water polygon datasets.
+-   Reduce false positives by passing vector data for things often mistaken for water, such as buildings and roads, to `aux_negative_vector_sources`.
+-   For scenes with no-data regions, set `no_data_value` so those pixels are read as no-data rather than as imagery.
 
 ### Cloudy imagery
 
 If you are working with cloudy imagery, either:
 
--   use a **temporal mosaic** that is already cloud and cloud-shadow free (e.g. via [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic) for Sentinel-2), or
--   apply a **high quality cloud and cloud shadow mask** and set those pixels to `0` (the `no_data_value`) before running OWM.
+-   use a temporal mosaic that is already cloud and cloud-shadow free (e.g. via [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic) for Sentinel-2), or
+-   apply a high quality cloud and cloud shadow mask and set those pixels to `0` (the `no_data_value`) before running OWM.
 
-This matters because OWM optimises its detection thresholds both **locally** (per region/patch) and **globally** (across the whole scene). Cloud and cloud-shadow pixels are out-of-distribution and can skew those optimisations, so bad data in one part of a scene can degrade the water prediction in other, otherwise-clean parts. Masking those pixels to no-data removes them from the optimisation entirely.
+This matters because OWM optimises its detection thresholds both locally (per region or patch) and globally (across the whole scene). Cloud and cloud-shadow pixels are out-of-distribution and can skew those optimisations, so bad data in one part of a scene can degrade the water prediction in other, otherwise-clean parts. Masking those pixels to no-data removes them from the optimisation entirely.
 
 [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) is a good choice for the masking step. See the [cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb) for an end-to-end mask-then-infer workflow.
 
@@ -180,7 +181,7 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 -    `use_osm_roads`: Whether to use road data to reduce false positives. Defaults to True
 
--    `vector_source`: Where water, road and building vectors come from — `"overture"` (Overture Maps GeoParquet) or `"osm"` (OpenStreetMap via the Overpass API). Defaults to "overture"
+-    `vector_source`: Where water, road and building vectors come from, either `"overture"` (Overture Maps GeoParquet) or `"osm"` (OpenStreetMap via the Overpass API). Defaults to "overture"
 
 -    `include_ocean`: Whether Overture ocean polygons count as positive water targets. These cover everything seaward of the OSM coastline, which the OSM tag set does not provide. Set to False if coastline/tide offsets cause false positives on your scenes. Only applies when `vector_source="overture"`. Defaults to True
 
@@ -194,7 +195,7 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 ## Cache maintenance
 
-Cached vectors are stored in a *generation* — a database and a parquet directory
+Cached vectors are stored in a *generation*, a database and a parquet directory
 whose names carry a version. A release that changes how vectors are stored bumps
 the generation, so older entries are ignored rather than migrated, and the old
 files stay on disk: a full copy of the cache per bump.
@@ -202,7 +203,7 @@ files stay on disk: a full copy of the cache per bump.
 `prune_stale_cache(cache_dir)` reclaims that space. It deletes generations below
 the current one, along with any parquet in the current generation that no entry
 points at, and returns the number of files deleted. Generations *above* the
-current one are left alone — they belong to a newer install sharing the
+current one are left alone. They belong to a newer install sharing the
 directory, so they are in use rather than obsolete.
 
 ```python
@@ -218,9 +219,9 @@ an older install would still read, so pruning means a downgrade refetches.
 
 Example notebooks are available in the [examples/](https://github.com/DPIRD-DMA/OmniWaterMask/tree/main/examples) directory:
 
--   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb) — Water segmentation on NAIP aerial imagery from HuggingFace
--   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb) — Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
--   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb) — Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
+-   [NAIP example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/NAIP%20example.ipynb). Water segmentation on NAIP aerial imagery from HuggingFace
+-   [Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20example.ipynb). Water segmentation on a Sentinel-2 mosaic using [s2mosaic](https://github.com/DPIRD-DMA/s2mosaic)
+-   [Cloudy Sentinel-2 example](https://github.com/DPIRD-DMA/OmniWaterMask/blob/main/examples/Sentinel%202%20cloudy%20example.ipynb). Masking clouds with [OmniCloudMask](https://github.com/DPIRD-DMA/OmniCloudMask) before running OWM on a cloudy AWS scene
 
 ## Changelog
 
@@ -275,7 +276,7 @@ uv run ruff format .
 uv run mypy omniwatermask/
 ```
 
-For maintainers: pushing a version tag (e.g. `git tag v0.4.4 && git push --tags`) builds the package and publishes it to PyPI via GitHub Actions trusted publishing — no tokens required.
+For maintainers, pushing a version tag (e.g. `git tag v0.4.4 && git push --tags`) builds the package and publishes it to PyPI via GitHub Actions trusted publishing. No tokens are required.
 
 ## License
 
@@ -287,12 +288,12 @@ Special thanks to the authors of the datasets OmniWaterMask is trained on.
 
 Model version 2 is trained on seven:
 
--   [S1S2-Water](https://github.com/MWieland/s1s2_water) — Sentinel-2 scenes with hand-checked water masks
--   [FLAIR #1](https://ignf.github.io/FLAIR/) — French national 0.2 m aerial imagery with land-cover labels
--   [GLH-Water](https://jack-bo1220.github.io/project/GLH-water.html) — global 0.3 m very-high-resolution satellite imagery with surface-water masks
--   [SNOWED](https://zenodo.org/records/8112715) — Sentinel-2 sub-scenes labelled from NOAA shoreline survey data
--   [CAID](https://zenodo.org/records/16461280) — aerial imagery with water segmentation masks
--   [Chesapeake Land Cover](https://lila.science/datasets/chesapeakelandcover) — NAIP imagery with 1 m land cover over six US states, labelled by the Chesapeake Conservancy
--   [EnviroAtlas](https://zenodo.org/records/5778193) — NAIP aerial imagery with EPA meter-scale land cover
+-   [S1S2-Water](https://github.com/MWieland/s1s2_water)
+-   [FLAIR #1](https://ignf.github.io/FLAIR/)
+-   [GLH-Water](https://jack-bo1220.github.io/project/GLH-water.html)
+-   [SNOWED](https://zenodo.org/records/8112715)
+-   [CAID](https://zenodo.org/records/16461280)
+-   [Chesapeake Land Cover](https://lila.science/datasets/chesapeakelandcover)
+-   [EnviroAtlas](https://zenodo.org/records/5778193)
 
 Model version 1, the model described in the paper, is trained on S1S2-Water and FLAIR #1.
