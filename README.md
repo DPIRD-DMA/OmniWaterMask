@@ -13,6 +13,12 @@ OmniWaterMask is a Python library for high accuracy water segmentation in high t
 
 [Check out the paper here](https://www.sciencedirect.com/science/article/pii/S0924271625002692)
 
+> **Note on model versions.** The paper describes **model version 1**. The
+> default is now **model version 2**, a different architecture trained on seven
+> datasets rather than two. To reproduce the published model, pass
+> `model_version=1` and install the `legacy` extra (see
+> [below](#running-model-versions-below-2-optional)).
+
 
 ## Features
 
@@ -167,14 +173,33 @@ This matters because OWM optimises its detection thresholds both **locally** (pe
 
 -    `cache_dir`: Directory for storing cached vector data. Defaults to "OWM_cache" in current directory
 
--    `prune_stale_cache(cache_dir)`: Reclaims the space old cache generations leave behind. A generation is a database and a parquet directory whose names carry a version, and a release that changes how vectors are stored bumps it so the old entries are ignored rather than migrated - but the files stay on disk, a full copy of the cache per bump. This deletes the generations below the current one, along with any parquet in the current one that no entry points at. Generations *above* the current one are left alone, since they belong to a newer install sharing the directory. It is deliberately manual: those files are the only copy an older install would still read, so pruning means a downgrade refetches.
-
 -    `destination_model_dir`: Directory to save the model weights. Defaults to None
 
 -    `model_download_source`: Source from which to download the model weights. Defaults to "hugging_face", can also be "google_drive".
 
 -    `model_version`: Which published model version to use. Defaults to the newest in the packaged index. Versions below 2 are fastai models and need the `legacy` extra installed (see above).
 
+## Cache maintenance
+
+Cached vectors are stored in a *generation* — a database and a parquet directory
+whose names carry a version. A release that changes how vectors are stored bumps
+the generation, so older entries are ignored rather than migrated, and the old
+files stay on disk: a full copy of the cache per bump.
+
+`prune_stale_cache(cache_dir)` reclaims that space. It deletes generations below
+the current one, along with any parquet in the current generation that no entry
+points at, and returns the number of files deleted. Generations *above* the
+current one are left alone — they belong to a newer install sharing the
+directory, so they are in use rather than obsolete.
+
+```python
+from omniwatermask import prune_stale_cache
+
+deleted = prune_stale_cache("OWM_cache")
+```
+
+It is deliberately manual rather than automatic: those files are the only copy
+an older install would still read, so pruning means a downgrade refetches.
 
 ## Examples
 
@@ -224,6 +249,11 @@ uv run pytest -m e2e                        # only the e2e/inference tests
 uv run pytest -m ""                         # everything, including e2e
 ```
 
+These download every published model version from both download sources and run
+real inference, so allow around ten minutes and a few hundred MB. Sync with
+`--all-extras` before running them, or the model version 1 cases skip for want
+of fastai rather than failing.
+
 Lint, format and type-check:
 
 ```bash
@@ -240,4 +270,16 @@ This project is licensed under the MIT License
 
 ## Acknowledgements
 
-Special thanks to the [S1S2-Water dataset authors ](https://github.com/MWieland/s1s2_water) and [The FLAIR #1 dataset authors](https://ignf.github.io/FLAIR/) for providing the valuable training datasets.
+Special thanks to the authors of the datasets OmniWaterMask is trained on.
+
+Model version 2 is trained on seven:
+
+-   [S1S2-Water](https://github.com/MWieland/s1s2_water) — Sentinel-2 scenes with hand-checked water masks
+-   [FLAIR #1](https://ignf.github.io/FLAIR/) — French national 0.2 m aerial imagery with land-cover labels
+-   GLH-Water — global 0.3 m satellite imagery with surface-water masks
+-   [SNOWED](https://zenodo.org/records/8112715) — Sentinel-2 sub-scenes labelled from NOAA shoreline survey data
+-   [CAID](https://zenodo.org/records/16461280) — aerial imagery with water segmentation masks
+-   Chesapeake Land Cover — NAIP imagery with 1 m land cover over six US states
+-   [EnviroAtlas](https://zenodo.org/records/5778193) — NAIP aerial imagery with EPA meter-scale land cover
+
+Model version 1, the model described in the paper, is trained on S1S2-Water and FLAIR #1.
