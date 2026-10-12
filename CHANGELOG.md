@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Where a positive water target and a negative building or road target overlap, the positive target now wins. Negative targets are not only left out of the threshold scoring, they are forced to non-water in the output, so false-positive Overture building footprints over farm dams punched holes in dams that an aux water layer marked as water. **This changes the mask** wherever the two overlap, and the positive target includes Overture/OSM water as well as aux layers: road pixels on bridges and jetties that fall inside a water polygon are no longer forced to land, so rivers can now run unbroken under bridges. The no-data mask is unaffected and still excludes everything it covers.
+
 ## [0.7.0b1] - Sep 22, 2026
 
 ### Added

@@ -8,6 +8,7 @@ import torch
 from omniwatermask.target_builders import TargetBuildError
 from omniwatermask.water_inf_helpers import (
     _collect_target,
+    _positive_overrules_negative,
     _try_collect_target,
     get_masked_iou,
     get_NDWI,
@@ -192,6 +193,25 @@ class TestMakeCompositeOutput:
     def test_rejects_an_all_none_dict(self):
         with pytest.raises(ValueError):
             make_composite_output({"a": None, "b": None})
+
+
+class TestPositiveOverrulesNegative:
+    def test_clears_negative_where_positive_is_set(self):
+        """A farm dam under a false-positive building footprint stays usable."""
+        negative = torch.tensor([[True, True], [False, True]])
+        positive = torch.tensor([[True, False], [True, False]])
+        result = _positive_overrules_negative(negative, positive)
+        assert result.tolist() == [[False, True], [False, True]]
+
+    def test_returns_negative_unchanged_without_positive(self):
+        negative = torch.tensor([[True, False]])
+        assert _positive_overrules_negative(negative, None) is negative
+
+    def test_accepts_a_non_bool_positive(self):
+        negative = torch.ones(2, 2, dtype=torch.bool)
+        positive = torch.tensor([[1.0, 0.0], [0.0, 0.0]])
+        result = _positive_overrules_negative(negative, positive)
+        assert result.tolist() == [[False, True], [True, True]]
 
 
 class TestCollectTarget:

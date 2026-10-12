@@ -418,6 +418,23 @@ def _fuse_any(layers: list[torch.Tensor]) -> torch.Tensor:
     return fused
 
 
+def _positive_overrules_negative(
+    negative: torch.Tensor, positive: Optional[torch.Tensor]
+) -> torch.Tensor:
+    """Clear the negative vector target wherever a positive one is set.
+
+    Building footprints include false positives over water - Overture has a
+    run of them over WA farm dams - and a negative target forces those pixels
+    to non-water in the output even when an aux water layer marks them as water.
+    A water feature is the more specific claim, so it wins. Only the vector
+    negatives are carved out: no-data is fused separately and still masks
+    everything it covers.
+    """
+    if positive is None:
+        return negative
+    return negative & ~positive.to(torch.bool)
+
+
 def _fuse_weighted(layers: list[torch.Tensor]) -> torch.Tensor:
     """Add layers together as small integers, without stacking them first.
 
@@ -654,7 +671,9 @@ def integrate_water_detection_methods(
         ndwi_target.append(vector_targets)
 
     if vector_negative_target is not None:
-        negative_target.append(vector_negative_target)
+        negative_target.append(
+            _positive_overrules_negative(vector_negative_target, vector_targets)
+        )
 
     if len(negative_target) > 0:
         negative_target_tensor: Optional[torch.Tensor] = _fuse_any(negative_target)
