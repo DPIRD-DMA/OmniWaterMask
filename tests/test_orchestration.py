@@ -341,3 +341,55 @@ class TestTargetThreadDatasetHandles:
 
         assert len(opened) == 2
         assert all(src.closed for src in opened)
+
+
+class TestPositiveTargetsOverruleNegatives:
+    """A water target wins over a building/road target on the same pixels.
+
+    Overture has false-positive building footprints over WA farm dams. With
+    a farm-dam layer as a positive target, the overlap used to stay in the
+    negative mask, so the dam was excluded from the optimisation it was
+    supplied to guide.
+    """
+
+    @staticmethod
+    def _stub_targets(monkeypatch, positive, negative):
+        """Hand each target thread its own raster, keyed on what it builds."""
+
+        def fake_build_targets(queue=None, **kwargs):
+            is_negative = kwargs.get("osm_buildings") or kwargs.get("osm_roads")
+            queue.put(negative if is_negative else positive)
+            return queue
+
+        monkeypatch.setattr(
+            "omniwatermask.water_inf_helpers.build_targets", fake_build_targets
+        )
+
+    def test_overlap_is_dropped_from_the_negative_mask(
+        self, mock_model, sample_geotiff, synthetic_bands, tmp_path, monkeypatch
+    ):
+        dam = torch.zeros(100, 100, dtype=torch.bool)
+        dam[40:60, 40:60] = True
+        buildings = torch.zeros(100, 100, dtype=torch.bool)
+        buildings[45:55, 45:55] = True  # false positive inside the dam
+        buildings[5:10, 5:10] = True  # a real building on land
+        self._stub_targets(monkeypatch, positive=dam, negative=buildings)
+
+        result, layer_names, _ = _integrate(
+            sample_geotiff,
+            synthetic_bands,
+            tmp_path,
+            use_ndwi=True,
+            use_model=True,
+            use_osm_water=True,
+            use_osm_building_mask=True,
+            debug_output=True,
+        )
+        negative = result[layer_names.index("Negative vector inputs")]
+        water = result[layer_names.index("Water predictions")]
+
+        assert not negative[40:60, 40:60].any()
+        assert negative[5:10, 5:10].all()
+        # Masked pixels are forced to non-water in the output, so the dam
+        # under the false footprint used to come out as a hole.
+        assert water[45:55, 45:55].all()
